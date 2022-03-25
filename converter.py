@@ -1,9 +1,13 @@
 #!/bin/python3
+from cmath import log
 import os,sys
 import re
 import psutil
 import time
 import asyncio
+import logging
+from urllib3 import Retry
+sys.path.append("./ffmpeg-python")
 import ffmpeg
 from pprint import pprint
 from ncnn_vulkan import *
@@ -12,7 +16,6 @@ from uuid import uuid1
 import math
 from re import split,sub
 from copy import deepcopy
-
 
 def touch(file_name):
        if os.path.exists(file_name):
@@ -25,6 +28,7 @@ def multi_touch_png(dir,num,key="%05d.png"):
     try:
         os.mkdir(dir)
     except FileExistsError:
+        logging.debug("Existed png dir %s"%dir)
         pass
     for i in range(1,num+1):
         filename=os.path.join(dir,key%i)
@@ -43,10 +47,10 @@ def get_proc_cmd(proc):
 class converter():
     if platform.system()=="Windows":
         temp_dir=os.getenv('TEMP')
-        is_windows=True
+        logging.debug("current OS is windows")
     else:
         temp_dir="/tmp"
-        is_windows=False
+        logging.debug("current OS is None-windows")
 
     time_interval=5
     frames_interval=10
@@ -90,19 +94,26 @@ class converter():
                     try:
                         frames=int(stream['nb_frames'])
                     except KeyError:
+                        logging.debug("cannot get frames from ffprobe, try calculate from duration, file %s"%file)
                         try:
                             time_str=stream["tags"]['DURATION']
                         except KeyError:
+                            logging.critical("cannot get frames from ffprobe or calculate from duration, exiting, file %s"%file)
                             raise ValueError("Unsupported input video file")
                         time=time_str.split(":")
                         time=int(time[0])*3600+int(time[1])*60+float(time[2])
                         frames=math.ceil(time*fr_temp[0]/fr_temp[1])
         except ffmpeg.Error:
-                raise ValueError("Incorrect video file")
-        return frames,framerate
+            logging.critical("Incorrect video file %s"%file)
+            raise ffmpeg.Error("Incorrect video file")
+        try:
+            return frames,framerate
+        except UnboundLocalError:
+            logging.critical("no video stream in file %s"%file)
+            raise
 
     @staticmethod
-    def ffmpeg_get_progress(proc,total=None):
+    def ffmpeg_get_progress(proc,logfile,total=None):
         start_time=psutil.Process(pid=proc.pid).create_time()
         if total==None:
             cmds=proc.args
@@ -116,41 +127,38 @@ class converter():
 
         current=0
         speed=0
-        if not converter.is_windows:
-            os.set_blocking(proc.stderr.fileno(), False)
-        while proc.returncode==None:
-            if converter.is_windows:
-                line=proc.stderr.readline(160).decode().split("\r")[-1]
-            else:
-                line=proc.stderr.readline().decode()
+        logfile.seek(0)
+        while True:
+            line=logfile.readline()
             if line=="":
                 break
             line=sub(r"= *",r"=",line)
             line=split("[ =]",line)
-            if line[0]!='frame' or len(line)<4 or line[3]=="":
+            if line[0]!='frame':
                 continue
             current=int(line[1])
-            if current>total*2:
+            if current>total+1:
+                logging.debug("impossable value current/total %s/%s, gonna retry"%(current,total))
                 continue
             speed=float(line[3])
             if speed==float(0):
                 eta=0
             else:
                 eta=(total-current)/speed
-            if converter.is_windows:
-                break
+
                 
         used_time=time.time()-start_time
         try:
             return current,total,used_time,eta
         except UnboundLocalError:
-            return 
+            logging.debug("cannot get current framecount from stderr, returning defaults")
+            return 0,total,used_time,0 
     
     @staticmethod
-    async def check_proc_progress(proc,total=None):
+    async def check_proc_progress(proc,total=None,logfile=None):
         cmd=proc.args[0]
         if "ffmpeg" in cmd:
-            return converter.ffmpeg_get_progress(proc,total)
+            return converter.ffmpeg_get_progress(proc,logfile,total)
         elif "realcugan-ncnn-vulkan" in cmd:
             return ncnn_vulkan.get_progress(proc,total=total)
         elif "rife-ncnn-vulkan" in cmd:
@@ -190,6 +198,7 @@ class converter():
         elif key==None:
             key=self.current["pattern_format"]
         multi_touch_png(output,self.current["frames"],key=key)
+        logging.info("generated temp dir %s"%output)
         return output
     @staticmethod
     def remove_temp_dir(dir,num,key):
@@ -202,8 +211,9 @@ class converter():
                 pass
         try:
             os.rmdir(dir)
+            logging.debug("removed temp dir %s"%dir)
         except OSError:
-            pass
+            logging.warning("cannot remove temp dir %s because there are other files in it"%dir)
 
     def gen_pattern_format(self):
         file_length=math.ceil(math.log(self.current["frames"],10))
@@ -221,6 +231,8 @@ class converter():
         if output==None:
             output=self.gen_temp_dir()
 
+        logfilename=os.path.join(output,"stderr.log")
+        logfile=open(logfilename,"w+")
         self.current["file"]=str(output)
         output_arg=os.path.join(output,self.gen_pattern_format())
         if target_fps==None:
@@ -230,7 +242,9 @@ class converter():
             
 
         kwargs={
-            "quiet":True}
+            "quiet":True,
+            "pipe_stderr":logfile
+            }
         self.query.append({
             "obj":run_obj,
             "args":kwargs,
@@ -297,12 +311,17 @@ class converter():
             raise ValueError("output file exists, not overwriting. you can use overwrite_output=True to override this")
         if input==None:
             input=os.path.join(self.current["file"],self.current["pattern_format"])
-        #ffmpeg_args.update({"r":self.current["framerate"]})
+        
+        logfilename=os.path.join(self.temp_dir,"ffmpeg_p2v_stderr.log")
+        logfile=open(logfilename,"w+")
         obj=ffmpeg.input(input,r=self.current["framerate"]).output(output,**ffmpeg_args)
+
+
         kwargs={
             "cmd":self.ffmpeg_cmd,
             "quiet":True,
-            "overwrite_output":overwrite_output
+            "overwrite_output":overwrite_output,
+            "pipe_stderr":logfile
             }
         self.current["file"]=output
         self.current["pattern_format"]=None
@@ -325,14 +344,24 @@ class converter():
                         print(self.progress_bar(1))
 
                     if proc.returncode!=0:
-                        print(cmd)
+                        logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s"%(cmd,proc.returncode))
                         raise RuntimeError("subprocess exited none-zero return code %s"%proc.returncode)
-
+                    
+                    logging.info("ChildProcess Exiting Normally, cmdline %s"%cmd)
+                    if "pipe_stderr" in line["args"]:
+                        f=line["args"]["pipe_stderr"]
+                        fname=f.name
+                        f.close()
+                        os.remove(fname)
+                        logging.debug("removed ChildProcess stderr log %s"%f.name)
+                    
                     index=self.query.index(line)
                     if index!=0:
                         current=self.query[index-1]["current"]
                         converter.remove_temp_dir(current["file"],current["frames"],current["pattern_format"])
+                        
                     
+
 
                 return
 
@@ -342,10 +371,10 @@ class converter():
                 line.update({"proc":proc})
                 if self.query.index(line)!=len(self.query)-1:
                     time.sleep(self.time_interval)
-                    print(self.progress_bar())
+                    print(self.progress_bar(1))
 
             while True:
-                print(self.progress_bar())
+                print(self.progress_bar(1))
 
         except:
             for line in self.query:
@@ -354,6 +383,7 @@ class converter():
                 if line!=self.query[-1]:
                     current=line["current"]
                     converter.remove_temp_dir(current["file"],current["frames"],current["pattern_format"])
+                    
             raise
 
 
@@ -363,19 +393,22 @@ class converter():
         tasks=[loop.create_task(asyncio.sleep(time))]
         for line in self.query:
             if "proc" in line and line["proc"].returncode==None:
-                total=line["current"]["frames"]
+                kwargs={
+                    "total":line["current"]["frames"]
+                }
+                if "pipe_stderr" in line["args"]:
+                    kwargs.update({
+                        "logfile":line["args"]["pipe_stderr"]
+                    })
                 tasks.append(
                     loop.create_task(
-                        converter.check_proc_progress(line["proc"],total=total)
+                        converter.check_proc_progress(line["proc"],**kwargs)
                         )
                     )
         loop.run_until_complete(asyncio.wait(tasks))
         results=[task.result() for task in tasks]
         results.remove(None)
         return results
-
-
-
 
 
 
@@ -398,4 +431,4 @@ if __name__=="__main__":
         "x264opts":"b-pyramid=0",
         "preset":"veryslow"
     }
-    converter(r"/mnt/temp2/movie/pv_281.mp4").ffmpeg_v2p(target_fps=120).realcugan().rife().ffmpeg_p2v("/mnt/temp/test.mp4",overwrite_output=True).run(sync=True)
+    converter(r"/mnt/temp2/movie/pv_281.mp4").ffmpeg_v2p(target_fps=12).ffmpeg_p2v("/mnt/temp/test.mp4",overwrite_output=True).run(sync=True)
