@@ -1,15 +1,11 @@
 #!/bin/python3
-from cmath import log
 import os,sys
-import re
 import psutil
 import time
 import asyncio
 import logging
-from urllib3 import Retry
 sys.path.append("./ffmpeg-python")
 import ffmpeg
-from pprint import pprint
 from ncnn_vulkan import *
 import platform
 from uuid import uuid1
@@ -215,6 +211,13 @@ class converter():
         except OSError:
             logging.warning("cannot remove temp dir %s because there are other files in it"%dir)
 
+    @staticmethod
+    def progress_bar0(current,total,time_used,eta):
+        used_time_str=ncnn_vulkan.second2hour(time_used)
+        eta_str=ncnn_vulkan.second2hour(eta)
+        print("[%s/%s time used:%s eta:%s]"%(current,total,used_time_str,eta_str),end="\r")
+
+
     def gen_pattern_format(self):
         file_length=math.ceil(math.log(self.current["frames"],10))
         key="%0"+str(file_length)+"d"
@@ -232,7 +235,7 @@ class converter():
             output=self.gen_temp_dir()
 
         logfilename=os.path.join(output,"stderr.log")
-        logfile=open(logfilename,"w+")
+        logfile=open(logfilename,"w+",encoding="utf8")
         self.current["file"]=str(output)
         output_arg=os.path.join(output,self.gen_pattern_format())
         if target_fps==None:
@@ -313,7 +316,7 @@ class converter():
             input=os.path.join(self.current["file"],self.current["pattern_format"])
         
         logfilename=os.path.join(self.temp_dir,"ffmpeg_p2v_stderr.log")
-        logfile=open(logfilename,"w+")
+        logfile=open(logfilename,"w+",encoding="utf8")
         obj=ffmpeg.input(input,r=self.current["framerate"]).output(output,**ffmpeg_args)
 
 
@@ -341,7 +344,7 @@ class converter():
                     line.update({"proc":proc})
                     cmd=get_proc_cmd(proc)
                     while proc.poll()==None:
-                        print(self.progress_bar(1))
+                        self.progress_bar(1)
 
                     if proc.returncode!=0:
                         logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s"%(cmd,proc.returncode))
@@ -371,10 +374,10 @@ class converter():
                 line.update({"proc":proc})
                 if self.query.index(line)!=len(self.query)-1:
                     time.sleep(self.time_interval)
-                    print(self.progress_bar(1))
+                    self.progress_bar(1)
 
             while True:
-                print(self.progress_bar(1))
+                self.progress_bar(1)
 
         except:
             for line in self.query:
@@ -408,7 +411,8 @@ class converter():
         loop.run_until_complete(asyncio.wait(tasks))
         results=[task.result() for task in tasks]
         results.remove(None)
-        return results
+        for line in results:
+            converter.progress_bar0(*line)
 
 
 
