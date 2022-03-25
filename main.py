@@ -1,5 +1,4 @@
 #!/bin/python3
-from curses import KEY_B2
 import os,sys
 import click
 from ffmpeg import probe
@@ -20,7 +19,6 @@ def list_video_file(dir,exts=("mkv","mp4","wmv")):
 @click.option("--fps", type=float, help='fps (frames per second) for output video',default=60,show_default=True)
 @click.option('--yes', default=False,type=click.BOOL, is_flag=True,help='overwrite distination file',show_default=True)
 @click.pass_context
-#@click.echo("any other option will be passed to ffmpeg, if it's not a ffmpeg option, convertion will failed! ")
 def main(ctx,input,output,resolution,fps,yes):
     """Combine realcugan rife and ffmpeg to upscale and frame interpolation for anime video in one command \n
     any option not listed below will be passed to ffmpeg, if it's not a ffmpeg option, convertion will failed! 

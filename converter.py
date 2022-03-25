@@ -1,9 +1,9 @@
 #!/bin/python3
 import os,sys
+import re
 import psutil
 import time
 import asyncio
-sys.path.append("./ffmpeg-python")
 import ffmpeg
 from pprint import pprint
 from ncnn_vulkan import *
@@ -43,8 +43,10 @@ def get_proc_cmd(proc):
 class converter():
     if platform.system()=="Windows":
         temp_dir=os.getenv('TEMP')
+        is_windows=True
     else:
         temp_dir="/tmp"
+        is_windows=False
 
     time_interval=5
     frames_interval=10
@@ -101,6 +103,7 @@ class converter():
 
     @staticmethod
     def ffmpeg_get_progress(proc,total=None):
+        start_time=psutil.Process(pid=proc.pid).create_time()
         if total==None:
             cmds=proc.args
             input=cmds[cmds.index("-i")+1]
@@ -111,31 +114,37 @@ class converter():
             else:
                 total,fps=converter.get_videofile_frames(input)
 
-        start_time=psutil.Process(pid=proc.pid).create_time()
         current=0
         speed=0
-        while True:
-            try:
-                stderr=proc.stderr
-                line=stderr.readline(100).decode().split("\r")[-1]
-                if line=="":
-                    current=total
-                    eta=float(0)
-                    break
-                line=sub(r"= *",r"=",line)
-                line=split("[ =]",line)
-                current=int(line[1])
-                if current>total*2:
-                    continue
-                speed=float(line[3])
-                line[4]
-                eta=(total-current)/speed
+        if not converter.is_windows:
+            os.set_blocking(proc.stderr.fileno(), False)
+        while proc.returncode==None:
+            if converter.is_windows:
+                line=proc.stderr.readline(160).decode().split("\r")[-1]
+            else:
+                line=proc.stderr.readline().decode()
+            if line=="":
                 break
-            except (IndexError,ValueError,ZeroDivisionError):
+            line=sub(r"= *",r"=",line)
+            line=split("[ =]",line)
+            if line[0]!='frame' or len(line)<4 or line[3]=="":
                 continue
+            current=int(line[1])
+            if current>total*2:
+                continue
+            speed=float(line[3])
+            if speed==float(0):
+                eta=0
+            else:
+                eta=(total-current)/speed
+            if converter.is_windows:
+                break
+                
         used_time=time.time()-start_time
-
-        return current,total,used_time,eta
+        try:
+            return current,total,used_time,eta
+        except UnboundLocalError:
+            return 
     
     @staticmethod
     async def check_proc_progress(proc,total=None):
@@ -256,8 +265,8 @@ class converter():
         kwargs=locals()
         kwargs.pop("self")
 
-        self.current["frames"]=self.current["frames"]*2
-        self.current["framerate"]=self.current["framerate"]*2-1
+        self.current["frames"]=self.current["frames"]*2-1
+        self.current["framerate"]=self.current["framerate"]*2
         self.gen_pattern_format()
 
         if input==None:
@@ -389,4 +398,4 @@ if __name__=="__main__":
         "x264opts":"b-pyramid=0",
         "preset":"veryslow"
     }
-    converter(r"/mnt/temp2/movie/pv_281.mp4").ffmpeg_v2p(target_fps=0.1).realcugan().rife().ffmpeg_p2v("/mnt/temp/test.mp4",overwrite_output=True).run(sync=True)
+    converter(r"/mnt/temp2/movie/pv_281.mp4").ffmpeg_v2p(target_fps=120).realcugan().rife().ffmpeg_p2v("/mnt/temp/test.mp4",overwrite_output=True).run(sync=True)
