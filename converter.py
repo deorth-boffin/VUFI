@@ -132,23 +132,27 @@ class converter():
             line=split("[ =]",line)
             if line[0]!='frame':
                 continue
-            current=int(line[1])
+            try:
+                current=int(line[1])
+            except ValueError:
+                current=0
             if current>total+1:
                 logging.debug("impossable value current/total %s/%s, gonna retry"%(current,total))
                 continue
-            speed=float(line[3])
+            used_time=time.time()-start_time
+            speed=current/used_time
             if speed==float(0):
                 eta=0
             else:
                 eta=(total-current)/speed
 
                 
-        used_time=time.time()-start_time
+        
         try:
             return current,total,used_time,eta
         except UnboundLocalError:
             logging.debug("cannot get current framecount from stderr, returning defaults")
-            return 0,total,used_time,0 
+            return 0,total,time.time()-start_time,0 
     
     @staticmethod
     async def check_proc_progress(proc,total=None,logfile=None):
@@ -215,7 +219,7 @@ class converter():
     def progress_bar0(current,total,time_used,eta):
         used_time_str=ncnn_vulkan.second2hour(time_used)
         eta_str=ncnn_vulkan.second2hour(eta)
-        print("[%s/%s time used:%s eta:%s]"%(current,total,used_time_str,eta_str),end="\r")
+        print("[%s/%s time used:%s ETA:%s]"%(current,total,used_time_str,eta_str),end="\r")
 
 
     def gen_pattern_format(self):
@@ -229,7 +233,6 @@ class converter():
             input=self.current["file"]
         if target_fps!=None:
             self.current["frames"]=math.ceil(self.current["frames"]*target_fps/self.current["framerate"])
-            #self.current["frames"]=round(self.current["frames"]*target_fps/self.current["framerate"])
             self.current["framerate"]=target_fps
         if output==None:
             output=self.gen_temp_dir()
@@ -271,6 +274,9 @@ class converter():
             multi_touch_png(output,num=self.current["frames"],key=self.current["pattern_format"])
 
         obj=realcugan_ncnn_vulkan()
+        logfilename=os.path.join(output,"stderr.log")
+        logfile=open(logfilename,"w+",encoding="utf8")
+        kwargs.update({"pipe_stderr":logfile})
         self.query.append({
             "obj":obj,
             "args":kwargs,
@@ -282,7 +288,7 @@ class converter():
         kwargs=locals()
         kwargs.pop("self")
 
-        self.current["frames"]=self.current["frames"]*2-1
+        self.current["frames"]=self.current["frames"]*2
         self.current["framerate"]=self.current["framerate"]*2
         self.gen_pattern_format()
 
@@ -302,6 +308,9 @@ class converter():
             self.current["pattern_format"]=f_pattern_format
 
         obj=rife_ncnn_vulkan()
+        logfilename=os.path.join(output,"stderr.log")
+        logfile=open(logfilename,"w+",encoding="utf8")
+        kwargs.update({"pipe_stderr":logfile})
         self.query.append({
             "obj":obj,
             "args":kwargs,
@@ -335,10 +344,8 @@ class converter():
         })
         return self
 
-    def run(self,sync=False):
-
+    def run(self,sync=False):#no async for now
         try:
-            if sync:
                 for line in self.query:
                     proc=line["obj"].run_async(**line["args"])
                     line.update({"proc":proc})
@@ -348,71 +355,54 @@ class converter():
 
                     if proc.returncode!=0:
                         logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s"%(cmd,proc.returncode))
+                        logging.critical("You might want to check its stderr %s"%line["args"]["pipe_stderr"])
                         raise RuntimeError("subprocess exited none-zero return code %s"%proc.returncode)
-                    
-                    logging.info("ChildProcess Exiting Normally, cmdline %s"%cmd)
-                    if "pipe_stderr" in line["args"]:
+                    else:
+                        logging.info("ChildProcess Exiting Normally, cmdline %s"%cmd)
                         f=line["args"]["pipe_stderr"]
                         fname=f.name
                         f.close()
                         os.remove(fname)
                         logging.debug("removed ChildProcess stderr log %s"%f.name)
                     
-                    index=self.query.index(line)
-                    if index!=0:
-                        current=self.query[index-1]["current"]
-                        converter.remove_temp_dir(current["file"],current["frames"],current["pattern_format"])
-                        
-                    
-
-
-                return
-
-                
-            for line in self.query:
-                proc=line["obj"].run_async(**line["args"])
-                line.update({"proc":proc})
-                if self.query.index(line)!=len(self.query)-1:
-                    time.sleep(self.time_interval)
-                    self.progress_bar(1)
-
-            while True:
-                self.progress_bar(1)
-
+                        index=self.query.index(line)
+                        if index!=0:
+                            current=self.query[index-1]["current"]
+                            converter.remove_temp_dir(current["file"],current["frames"],current["pattern_format"])
         except:
             for line in self.query:
                 if "proc" in line:
                     line["proc"].terminate()
-                if line!=self.query[-1]:
-                    current=line["current"]
-                    converter.remove_temp_dir(current["file"],current["frames"],current["pattern_format"])
-                    
             raise
+                    
+
 
 
 
     def progress_bar(self,time=0):
         loop=asyncio.get_event_loop()
         tasks=[loop.create_task(asyncio.sleep(time))]
+        results={}
         for line in self.query:
             if "proc" in line and line["proc"].returncode==None:
                 kwargs={
-                    "total":line["current"]["frames"]
+                    "total":line["current"]["frames"],
+                    "logfile":line["args"]["pipe_stderr"]
                 }
-                if "pipe_stderr" in line["args"]:
-                    kwargs.update({
-                        "logfile":line["args"]["pipe_stderr"]
-                    })
-                tasks.append(
-                    loop.create_task(
+                task=loop.create_task(
                         converter.check_proc_progress(line["proc"],**kwargs)
                         )
-                    )
+                tasks.append(task)
+                results.update({line["proc"]:task})
         loop.run_until_complete(asyncio.wait(tasks))
-        results=[task.result() for task in tasks]
-        results.remove(None)
-        for line in results:
-            converter.progress_bar0(*line)
+
+        for proc in results:
+            result=results[proc].result()
+            results.update({proc:result})
+            last_result=result
+        converter.progress_bar0(*last_result)
+
+        return results
 
 
 

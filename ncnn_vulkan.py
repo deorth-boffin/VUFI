@@ -31,7 +31,7 @@ class ncnn_vulkan():
             current,total,used_time,eta=ncnn_vulkan.get_progress(proc,times)
             used_time_str=ncnn_vulkan.second2hour(used_time)
             eta_str=ncnn_vulkan.second2hour(eta)
-            print("%s/%s time used:%s eta:%s"%(current,total,used_time_str,eta_str),end="\r")
+            print("[%s/%s time used:%s ETA:%s]"%(current,total,used_time_str,eta_str),end="\r")
 
             loop = asyncio.get_event_loop()
             loop.run_until_complete(co)
@@ -52,8 +52,6 @@ class ncnn_vulkan():
         outdir=cmds[cmds.index("-o")+1]
         start_time=psProcess.create_time()
 
-
-        #loop=asyncio.get_event_loop()
         tasks=[]
         for file in os.listdir(outdir):
             ffile=os.path.join(outdir,file)
@@ -84,12 +82,12 @@ class ncnn_vulkan():
             raise
 
 
-    def run_async(self,**kwargs):
+    def run_async(self,pipe_stderr=subprocess.DEVNULL,**kwargs):
         cmd=[self.binpath]
         for arg in kwargs:
             cmd.append("-%s"%arg[0])
             cmd.append(str(kwargs[arg]))
-        return subprocess.Popen(cmd,stderr=subprocess.DEVNULL,stdout=subprocess.DEVNULL)
+        return subprocess.Popen(cmd,stderr=pipe_stderr,stdout=subprocess.DEVNULL)
 
 
 class realcugan_ncnn_vulkan(ncnn_vulkan):
@@ -108,9 +106,4 @@ class rife_ncnn_vulkan(ncnn_vulkan):
 
 
 if __name__=="__main__":
-    #realcugan_ncnn_vulkan.set_binpath("D:\\Program Files\\realcugan-ncnn-vulkan\\realcugan-ncnn-vulkan.exe")
-    #realcugan_ncnn_vulkan().run(input="Z:\\279_2",output="Z:\\temp")
-    #rife_ncnn_vulkan.set_binpath("D:\\Program Files\\rife-ncnn-vulkan\\rife-ncnn-vulkan.exe")
-    #rife_ncnn_vulkan().run(input="Z:\\279_2",output="Z:\\279_3")
-    realcugan_ncnn_vulkan.set_binpath("/root/realcugan-ncnn-vulkan/realcugan-ncnn-vulkan")
-    realcugan_ncnn_vulkan().run(input="/mnt/ytb/111",output="/mnt/temp",scale=3)
+    pass
