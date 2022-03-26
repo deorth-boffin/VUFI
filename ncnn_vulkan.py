@@ -4,13 +4,20 @@ import subprocess
 import psutil
 import time
 import asyncio
-
+import logging
+import platform
 
 
 class ncnn_vulkan():
-
+    if platform.system()=="Windows":
+        correct_return_code=4294967295
+    else:
+        correct_return_code=255
     def __init__(self) -> None:
-        pass
+        status, result=subprocess.getstatusoutput(self.binpath)
+        if status!=self.correct_return_code:
+            logging.error("running %s error, %s"%(self.binpath,result))
+            raise FileNotFoundError("running %s error")
 
     @classmethod
     def set_binpath(cls,binpath):

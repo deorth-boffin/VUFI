@@ -1,17 +1,25 @@
 #!/bin/python3
+from cmath import log
 import os,sys
 import psutil
 import time
 import asyncio
 import logging
-sys.path.append("./ffmpeg-python")
-import ffmpeg
 from ncnn_vulkan import *
 import platform
 from uuid import uuid1
 import math
 from re import split,sub
 from copy import deepcopy
+
+import importlib.util
+MODULE_PATH = os.path.join(os.path.dirname(__file__),"ffmpeg-python","ffmpeg","__init__.py")
+MODULE_NAME = "ffmpeg"
+spec = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
+ffmpeg = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = ffmpeg 
+spec.loader.exec_module(ffmpeg)
+
 
 def touch(file_name):
        if os.path.exists(file_name):
@@ -92,12 +100,15 @@ class converter():
                     except KeyError:
                         logging.debug("cannot get frames from ffprobe, try calculate from duration, file %s"%file)
                         try:
-                            time_str=stream["tags"]['DURATION']
+                            if "duration" in stream:
+                                time=float(stream["duration"])
+                            else:
+                                time_str=stream["tags"]['DURATION']
+                                time=time_str.split(":")
+                                time=int(time[0])*3600+int(time[1])*60+float(time[2])
                         except KeyError:
                             logging.critical("cannot get frames from ffprobe or calculate from duration, exiting, file %s"%file)
                             raise ValueError("Unsupported input video file")
-                        time=time_str.split(":")
-                        time=int(time[0])*3600+int(time[1])*60+float(time[2])
                         frames=math.ceil(time*fr_temp[0]/fr_temp[1])
         except ffmpeg.Error:
             logging.critical("Incorrect video file %s"%file)
@@ -219,7 +230,7 @@ class converter():
     def progress_bar0(current,total,time_used,eta):
         used_time_str=ncnn_vulkan.second2hour(time_used)
         eta_str=ncnn_vulkan.second2hour(eta)
-        print("[%s/%s time used:%s ETA:%s]"%(current,total,used_time_str,eta_str),end="\r")
+        print("[%s/%s time used:%s ETA:%s]  "%(current,total,used_time_str,eta_str),end="\r")
 
 
     def gen_pattern_format(self):
@@ -248,6 +259,7 @@ class converter():
             
 
         kwargs={
+            "cmd":self.ffmpeg_cmd,
             "quiet":True,
             "pipe_stderr":logfile
             }
@@ -262,26 +274,32 @@ class converter():
 
     def realcugan(self,input=None,output=None,scale=2,noise=-1,model="models-se",j_threads="1:1:1"):
         kwargs=locals()
-        kwargs.pop("self")
-        if input==None:
-            input=self.current["file"]
-            kwargs.update({"input":input})
-        if output==None:
-            output=self.gen_temp_dir()
-            kwargs.update({"output":output})
-            self.current["file"]=str(output)
-        else:
-            multi_touch_png(output,num=self.current["frames"],key=self.current["pattern_format"])
+        if scale in (2,3,4):
+            kwargs.pop("self")
+            if input==None:
+                input=self.current["file"]
+                kwargs.update({"input":input})
+            if output==None:
+                output=self.gen_temp_dir()
+                kwargs.update({"output":output})
+                self.current["file"]=str(output)
+            else:
+                multi_touch_png(output,num=self.current["frames"],key=self.current["pattern_format"])
 
-        obj=realcugan_ncnn_vulkan()
-        logfilename=os.path.join(output,"stderr.log")
-        logfile=open(logfilename,"w+",encoding="utf8")
-        kwargs.update({"pipe_stderr":logfile})
-        self.query.append({
-            "obj":obj,
-            "args":kwargs,
-            "current":deepcopy(self.current)
-        })
+            obj=realcugan_ncnn_vulkan()
+            logfilename=os.path.join(output,"stderr.log")
+            logfile=open(logfilename,"w+",encoding="utf8")
+            kwargs.update({"pipe_stderr":logfile})
+            self.query.append({
+                "obj":obj,
+                "args":kwargs,
+                "current":deepcopy(self.current)
+            })
+        elif scale in (6,8):
+            self.realcugan(input=input,output=None,scale=int(scale/2),noise=noise,model=model,j_threads=j_threads)
+            self.realcugan(input=None,output=output,scale=2,noise=noise,model=model,j_threads=j_threads)
+        else:
+            logging.error("not supported scale %s, didn't do anything"%scale)
         return self
 
     def rife(self,input=None,output=None,model="rife-anime",j_threads="1:1:1",f_pattern_format=None):
@@ -320,7 +338,8 @@ class converter():
 
     def ffmpeg_p2v(self,output,input=None,overwrite_output=False,**ffmpeg_args):
         if os.path.exists(output) and not overwrite_output:
-            raise ValueError("output file exists, not overwriting. you can use overwrite_output=True to override this")
+            logging.error("output file %s a exists, not overwriting. you can use overwrite_output=True to override this"%output)
+            raise ValueError("output file %s a exists, not overwriting. you can use overwrite_output=True to override this"%output)
         if input==None:
             input=os.path.join(self.current["file"],self.current["pattern_format"])
         
@@ -350,12 +369,13 @@ class converter():
                     proc=line["obj"].run_async(**line["args"])
                     line.update({"proc":proc})
                     cmd=get_proc_cmd(proc)
+                    logging.debug("ChildProcess Started, cmdline %s, pid %s"%(cmd,proc.pid))
                     while proc.poll()==None:
                         self.progress_bar(1)
 
                     if proc.returncode!=0:
                         logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s"%(cmd,proc.returncode))
-                        logging.critical("You might want to check its stderr %s"%line["args"]["pipe_stderr"])
+                        logging.critical("You might want to check its stderr %s"%line["args"]["pipe_stderr"].name)
                         raise RuntimeError("subprocess exited none-zero return code %s"%proc.returncode)
                     else:
                         logging.info("ChildProcess Exiting Normally, cmdline %s"%cmd)
