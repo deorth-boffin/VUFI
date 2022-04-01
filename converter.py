@@ -85,38 +85,29 @@ class converter():
         return num
 
     @staticmethod
-    def get_videofile_frames(file):
+    def get_videofile_frames(file,ffprobe="ffprobe"):
         try:
-            info=ffmpeg.probe(file)
-            for stream in info['streams']:
-                if stream['avg_frame_rate']!="0/0":
-                    fr_temp=stream['avg_frame_rate'].split("/")
-                    fr_temp[0]=int(fr_temp[0])
-                    fr_temp[1]=int(fr_temp[1])
-                    framerate=fr_temp[0]/fr_temp[1]
-                    try:
-                        frames=int(stream['nb_frames'])
-                    except KeyError:
-                        logging.debug("cannot get frames from ffprobe, try calculate from duration, file %s"%file)
-                        try:
-                            if "duration" in stream:
-                                time=float(stream["duration"])
-                            else:
-                                time_str=stream["tags"]['DURATION']
-                                time=time_str.split(":")
-                                time=int(time[0])*3600+int(time[1])*60+float(time[2])
-                        except KeyError:
-                            logging.critical("cannot get frames from ffprobe or calculate from duration, exiting, file %s"%file)
-                            raise ValueError("Unsupported input video file")
-                        frames=math.ceil(time*fr_temp[0]/fr_temp[1])
+            info=ffmpeg.probe(file,cmd=ffprobe,select_streams="v:0")
+            stream=info["streams"][0]
+            fr_temp=stream['avg_frame_rate'].split("/")
+            fr_temp[0]=int(fr_temp[0])
+            fr_temp[1]=int(fr_temp[1])
+            framerate=fr_temp[0]/fr_temp[1]
+            try:
+                frames=int(stream['nb_frames'])
+            except KeyError:
+                cmd=(ffprobe,"-v","error","-select_streams","v:0","-count_packets","-show_entries","stream=nb_read_packets","-of","csv=p=0",file)
+                logging.debug("cannot get frames from ffmpeg.ffprobe, try get it from command line, cmd %s"%" ".join(cmd))
+                p=subprocess.Popen(cmd,stdout=subprocess.PIPE)
+                p.wait()
+                frames=int(p.stdout.read())
         except ffmpeg.Error:
             logging.critical("Incorrect video file %s"%file)
             raise ffmpeg.Error("Incorrect video file")
-        try:
-            return frames,framerate
-        except UnboundLocalError:
+        except IndexError:
             logging.critical("no video stream in file %s"%file)
             raise
+        return frames,framerate
 
     @staticmethod
     def ffmpeg_get_progress(proc,logfile,total=None):
@@ -502,6 +493,7 @@ class converter():
 
 
 if __name__=="__main__":
+
     try:
         os.remove("/mnt/temp/test.log")
     except FileNotFoundError:
