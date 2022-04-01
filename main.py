@@ -41,18 +41,23 @@ def get_res_fps(video_file):
 @click.option("--refps", type=float, help='rearrange input video fps via ffmpeg',default=None,show_default=True)
 @click.option("--output",'--out', type=click.Path(), help='output video file or forder',prompt=True)
 @click.option("--temp-dir",'--temp', type=click.Path(exists=True),default=None, help='set temp dir for converter')
-@click.option("--ffmpeg", type=click.Path(exists=True),default=None, help='set ffmpeg binary path')
+@click.option("--ffmpeg-bin", type=click.Path(exists=True),default=None, help='set ffmpeg binary path')
 @click.option("--realcugan", type=click.Path(exists=True),default=None, help='set realcuga-ncnn-vulkan binary path')
-@click.option("--rife", type=click.Path(exists=True),default=None, help='set realcuga-ncnn-vulkan binary path')
+@click.option("--realcugan-models", type=str,default="models-se", help='set realcuga-ncnn-vulkan models path',show_default=True)
+@click.option("--noise-level", type=int,default=-1, help='set realcuga-ncnn-vulkan denoise level',show_default=True)
+@click.option("--rife", type=click.Path(exists=True),default=None, help='set rife-ncnn-vulkan binary path')
+@click.option("--rife-models", type=str,default="rife-anime", help='set rife-ncnn-vulkan models path',show_default=True)
+@click.option("--gpu-id", type=str,default="auto", help='gpu device to use (-1=cpu) can be 0,1,2 for multi-gpu',show_default=True)
+@click.option("--j-threads", type=str,default="1:2:2", help='thread count for load/proc/save, can be 1:2,2,2:2 for multi-gpu',show_default=True)
 @click.option("--resolution",'--res', type=str, help='resolution for output video',default="3840x2160",show_default=True)
 @click.option("--fps", type=float, help='fps (frames per second) for output video',default=60,show_default=True)
-@click.option("--log-level", type=str, help='set log level',default="WARING",show_default=True)
+@click.option("--log-level", type=str, help='set log level',default="WARNING",show_default=True)
 @click.option("--log-file", type=str, help='set log file instead of log to stderr',default=None)
 @click.option('--yes', default=False,type=click.BOOL, is_flag=True,help='overwrite distination file',show_default=True)
 @click.pass_context
-def main(ctx,input,refps,output,temp_dir,ffmpeg,realcugan,rife,resolution,fps,log_level,log_file,yes):
+def main(ctx,input,refps,output,temp_dir,ffmpeg_bin,realcugan,realcugan_models,noise_level,rife,rife_models,gpu_id,j_threads,resolution,fps,log_level,log_file,yes):
     """Combine realcugan rife and ffmpeg to upscale and frame interpolation for anime video in one command \n
-    any option not listed below will be passed to ffmpeg, if it's not a ffmpeg option, convertion will failed! 
+    Any option not listed below will be passed to ffmpeg, if it's not a ffmpeg option, convertion will failed! 
     """
     LOG_FORMAT = "%(asctime)s.%(msecs)03d %(name)s: [%(levelname)s] %(pathname)s | %(message)s "
     DATE_FORMAT = '%Y-%m-%d %H:%M:%S' 
@@ -95,6 +100,8 @@ def main(ctx,input,refps,output,temp_dir,ffmpeg,realcugan,rife,resolution,fps,lo
         realcugan_ncnn_vulkan.set_binpath(realcugan)
     if rife:
         rife_ncnn_vulkan.set_binpath(rife)
+    if ffmpeg_bin:
+        converter.set_ffmpeg_cmd(ffmpeg_bin)
     
 
 
@@ -121,11 +128,11 @@ def main(ctx,input,refps,output,temp_dir,ffmpeg,realcugan,rife,resolution,fps,lo
         
         conv_obj=converter(input_file).ffmpeg_v2p(target_fps=refps)
         if res_scale in (2,3,4):
-            conv_obj.realcugan(scale=res_scale)
+            conv_obj.realcugan(scale=res_scale,noise=noise_level,model=realcugan_models,gpu_id=gpu_id,j_threads=j_threads)
         elif res_scale in (5,6):
-            conv_obj.realcugan(scale=6)
+            conv_obj.realcugan(scale=6,noise=noise_level,model=realcugan_models,gpu_id=gpu_id,j_threads=j_threads)
         elif res_scale in (7,8):
-            conv_obj.realcugan(scale=8)
+            conv_obj.realcugan(scale=8,noise=noise_level,model=realcugan_models,gpu_id=gpu_id,j_threads=j_threads)
         elif res_scale==1:
             pass
         else:
@@ -134,7 +141,7 @@ def main(ctx,input,refps,output,temp_dir,ffmpeg,realcugan,rife,resolution,fps,lo
         
         #I need to know if rife support any other scale other than 2
         if time_scale>=2:
-            conv_obj.rife()
+            conv_obj.rife(model=rife_models,gpu_id=gpu_id,j_threads=j_threads)
 
         conv_obj.ffmpeg_p2v(output=output_file,overwrite_output=yes,**ffmpeg_args).run()
 
