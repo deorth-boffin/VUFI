@@ -1,12 +1,12 @@
 #!/bin/python3
 from cmath import log
+from concurrent.futures import process
 import os,sys
 import psutil
 import time
 import asyncio
 import logging
 from ncnn_vulkan import *
-import platform
 from uuid import uuid1
 import math
 from re import split,sub
@@ -33,7 +33,6 @@ def multi_touch_png(dir,num,key="%05d.png"):
         os.mkdir(dir)
     except FileExistsError:
         logging.debug("Existed png dir %s"%dir)
-        pass
     for i in range(1,num+1):
         filename=os.path.join(dir,key%i)
         touch(filename)
@@ -49,7 +48,7 @@ def get_proc_cmd(proc):
 
 
 class converter():
-    if platform.system()=="Windows":
+    if sys.platform=="win32":
         temp_dir=os.getenv('TEMP')
         logging.debug("current OS is windows")
     else:
@@ -57,7 +56,7 @@ class converter():
         logging.debug("current OS is None-windows")
 
     time_interval=5
-    frames_interval=10
+    frames_interval=200
     ffmpeg_cmd="ffmpeg"
 
     @classmethod
@@ -227,10 +226,15 @@ class converter():
             logging.warning("cannot remove temp dir %s because there are other files in it"%dir)
 
     @staticmethod
-    def progress_bar0(current,total,time_used,eta):
-        used_time_str=ncnn_vulkan.second2hour(time_used)
-        eta_str=ncnn_vulkan.second2hour(eta)
-        print("[%s/%s time used:%s ETA:%s]  "%(current,total,used_time_str,eta_str),end="\r")
+    def progress_bar0(results):
+        out_str=""
+        for proc in results:
+            current,total,time_used,eta=results[proc]
+            used_time_str=ncnn_vulkan.second2hour(time_used)
+            eta_str=ncnn_vulkan.second2hour(eta)
+            name=os.path.basename(proc.args[0]).split("-")[0]
+            out_str+="[%s %s/%s time used:%s ETA:%s]"%(name,current,total,used_time_str,eta_str)
+        print("\r%s  "%out_str,end="")
 
 
     def gen_pattern_format(self):
@@ -272,7 +276,7 @@ class converter():
 
 
 
-    def realcugan(self,input=None,output=None,scale=2,noise=-1,model="models-se",j_threads="1:1:1"):
+    def realcugan(self,input=None,output=None,scale=2,noise=-1,model="models-se",j_threads="1:1:1",gpu_id="auto"):
         kwargs=locals()
         if scale in (2,3,4):
             kwargs.pop("self")
@@ -296,13 +300,13 @@ class converter():
                 "current":deepcopy(self.current)
             })
         elif scale in (6,8):
-            self.realcugan(input=input,output=None,scale=int(scale/2),noise=noise,model=model,j_threads=j_threads)
-            self.realcugan(input=None,output=output,scale=2,noise=noise,model=model,j_threads=j_threads)
+            self.realcugan(input=input,output=None,scale=int(scale/2),noise=noise,model=model,j_threads=j_threads,gpu_id=gpu_id)
+            self.realcugan(input=None,output=output,scale=2,noise=noise,model=model,j_threads=j_threads,gpu_id=gpu_id)
         else:
             logging.error("not supported scale %s, didn't do anything"%scale)
         return self
 
-    def rife(self,input=None,output=None,model="rife-anime",j_threads="1:1:1",f_pattern_format=None):
+    def rife(self,input=None,output=None,model="rife-anime",j_threads="1:2:2",f_pattern_format=None,gpu_id="auto"):
         kwargs=locals()
         kwargs.pop("self")
 
@@ -343,7 +347,8 @@ class converter():
         if input==None:
             input=os.path.join(self.current["file"],self.current["pattern_format"])
         
-        logfilename=os.path.join(self.temp_dir,"ffmpeg_p2v_stderr.log")
+        logname=os.path.basename(output).replace(".","_")+"_ffmpeg_p2v_stderr.log"
+        logfilename=os.path.join(self.temp_dir,logname)
         logfile=open(logfilename,"w+",encoding="utf8")
         obj=ffmpeg.input(input,r=self.current["framerate"]).output(output,**ffmpeg_args)
 
@@ -363,13 +368,14 @@ class converter():
         })
         return self
 
-    def run(self,sync=False):#no async for now
+    def run(self,sync=True):#no async for now
         try:
+            if sync:
                 for line in self.query:
                     proc=line["obj"].run_async(**line["args"])
                     line.update({"proc":proc})
                     cmd=get_proc_cmd(proc)
-                    logging.debug("ChildProcess Started, cmdline %s, pid %s"%(cmd,proc.pid))
+                    logging.debug("ChildProcess Started, cmdline %s, pid %s, log %s"%(cmd,proc.pid,line["args"]["pipe_stderr"].name))
                     while proc.poll()==None:
                         self.progress_bar(1)
 
@@ -389,6 +395,43 @@ class converter():
                         if index!=0:
                             current=self.query[index-1]["current"]
                             converter.remove_temp_dir(current["file"],current["frames"],current["pattern_format"])
+            else:
+                flag=False
+                for line in self.query:
+                    proc=line["obj"].run_async(**line["args"])
+                    line.update({"proc":proc})
+                    cmd=get_proc_cmd(proc)
+                    logging.debug("ChildProcess Started, cmdline %s, pid %s, log %s"%(cmd,proc.pid,line["args"]["pipe_stderr"].name))
+
+                    if flag:
+                        if sys.platform=="win32":
+                            psutil.Process(proc.pid).nice(psutil.IDLE_PRIORITY_CLASS)
+                        else:
+                            psutil.Process(proc.pid).nice(-20)
+                        flag=False
+                    else:
+                        if sys.platform=="win32":
+                            psutil.Process(proc.pid).nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+                        else:
+                            psutil.Process(proc.pid).nice(-10)
+
+                
+                    results=self.progress_bar(0)
+                    while proc.returncode==None and (results[proc][2]<self.time_interval or results[proc][0]<self.frames_interval):
+                        results=self.progress_bar(1)
+                        self.progress_contorl(results)
+
+    
+                while True:
+                    results=self.progress_bar(1)
+                    self.progress_contorl(results)
+                    polls=[proc.returncode for proc in results.keys()]
+                    if not None in polls:
+                        break
+
+
+
+
         except:
             for line in self.query:
                 if "proc" in line:
@@ -396,7 +439,23 @@ class converter():
             raise
                     
 
-
+    def progress_contorl(self,results):
+        procs=list(results.keys())
+        procs_num=len(procs)
+        for index in range(1,procs_num):
+            proc=procs[index]
+            proc_former=procs[index-1]
+            if proc.returncode==None:
+                p=psutil.Process(pid=proc.pid)
+                status=p.status()
+                if status=="running" and results[proc][0] > results[proc_former][0]+self.frames_interval:
+                    p.suspend()
+                    status=p.status()
+                    logging.debug("paused process pid %s"%proc.pid)
+                elif status=="sleeping" and results[proc][0] <= results[proc_former][0]+self.frames_interval:
+                    p.resume()
+                    status=p.status()
+                    logging.debug("resumed process pid %s"%proc.pid)
 
 
     def progress_bar(self,time=0):
@@ -404,7 +463,7 @@ class converter():
         tasks=[loop.create_task(asyncio.sleep(time))]
         results={}
         for line in self.query:
-            if "proc" in line and line["proc"].returncode==None:
+            if "proc" in line and line["proc"].poll()==None:
                 kwargs={
                     "total":line["current"]["frames"],
                     "logfile":line["args"]["pipe_stderr"]
@@ -419,8 +478,8 @@ class converter():
         for proc in results:
             result=results[proc].result()
             results.update({proc:result})
-            last_result=result
-        converter.progress_bar0(*last_result)
+
+        converter.progress_bar0(results)
 
         return results
 
@@ -435,8 +494,20 @@ class converter():
 
 
 if __name__=="__main__":
+    try:
+        os.remove("/mnt/temp/test.log")
+    except FileNotFoundError:
+        pass
+    LOG_FORMAT = "%(asctime)s.%(msecs)03d %(name)s: [%(levelname)s] %(pathname)s | %(message)s "
+    DATE_FORMAT = '%Y-%m-%d %H:%M:%S' 
+    log_level=logging.DEBUG
+    logging.basicConfig(level=log_level,
+                    format=LOG_FORMAT,
+                    datefmt = DATE_FORMAT,
+                    force=True,
+                    filename="/mnt/temp/test.log")
+    converter.set_time_interval(3)
     realcugan_ncnn_vulkan.set_binpath("/root/realcugan-ncnn-vulkan/realcugan-ncnn-vulkan")
-    converter.set_time_interval(0)
     converter.set_temp_dir("/mnt/temp")
     ffmpeg_args={
         "codec":"libx264",
@@ -445,4 +516,6 @@ if __name__=="__main__":
         "x264opts":"b-pyramid=0",
         "preset":"veryslow"
     }
-    converter(r"/mnt/temp2/movie/pv_281.mp4").ffmpeg_v2p(target_fps=12).ffmpeg_p2v("/mnt/temp/test.mp4",overwrite_output=True).run(sync=True)
+    input_file="/mnt/ytb/Wall-E explained by an idiot.mkv"
+    #input_file=r"/mnt/temp2/movie/pv_277.mp4"
+    converter(input_file).ffmpeg_v2p(target_fps=12).ffmpeg_p2v("/mnt/temp/test.mp4",overwrite_output=True).run(sync=False)
