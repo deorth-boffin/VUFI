@@ -256,10 +256,14 @@ class converter():
         logfile=open(logfilename,"w+",encoding="utf8")
         self.current["file"]=str(output)
         output_arg=os.path.join(output,self.gen_pattern_format())
+        input_obj=ffmpeg.input(input)
         if target_fps==None:
-            run_obj=ffmpeg.input(input).output(output_arg)
+            run_obj=input_obj.output(output_arg)
         else:
-            run_obj=ffmpeg.input(input).filter("fps",fps=target_fps,round=round).output(output_arg)
+            run_obj=input_obj.filter("fps",fps=target_fps,round=round).output(output_arg)
+        
+        if hasattr(input_obj,"audio"):
+            self.audio=input_obj.audio
             
 
         kwargs={
@@ -350,7 +354,11 @@ class converter():
         logname=os.path.basename(output).replace(".","_")+"_ffmpeg_p2v_stderr.log"
         logfilename=os.path.join(self.temp_dir,logname)
         logfile=open(logfilename,"w+",encoding="utf8")
-        obj=ffmpeg.input(input,r=self.current["framerate"]).output(output,**ffmpeg_args)
+        streams=[ffmpeg.input(input,r=self.current["framerate"])]
+        if hasattr(self,"audio"):
+            streams.append(self.audio)
+            ffmpeg_args.update({"acodec":"copy"})
+        obj=ffmpeg.output(*streams,output,**ffmpeg_args)
 
 
         kwargs={
