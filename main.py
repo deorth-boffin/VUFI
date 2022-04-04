@@ -1,6 +1,6 @@
 #!/bin/python3
 import logging
-import os
+import os,sys
 import click
 from pprint import pprint
 from converter import converter,ffmpeg
@@ -37,25 +37,37 @@ def get_res_fps(video_file):
 @click.command(no_args_is_help=True,context_settings=dict(
     ignore_unknown_options=True,
     allow_extra_args=True))
+#input options
 @click.option("--input",'--in', type=click.Path(exists=True), help='input video file or forder',prompt=True)
 @click.option("--refps", type=float, help='rearrange input video fps via ffmpeg',default=None,show_default=True)
+@click.option("--refps-round","--round", type=str, help='round to use when rearrange input video fps via ffmpeg',default="up",show_default=True)
+#output options
 @click.option("--output",'--out', type=click.Path(), help='output video file or forder',prompt=True)
-@click.option("--temp-dir",'--temp', type=click.Path(exists=True),default=None, help='set temp dir for converter')
-@click.option("--ffmpeg-bin", type=click.Path(exists=True),default=None, help='set ffmpeg binary path')
-@click.option("--realcugan", type=click.Path(exists=True),default=None, help='set realcuga-ncnn-vulkan binary path')
-@click.option("--realcugan-models", type=str,default="models-se", help='set realcuga-ncnn-vulkan models path',show_default=True)
-@click.option("--noise-level", type=int,default=-1, help='set realcuga-ncnn-vulkan denoise level',show_default=True)
-@click.option("--rife", type=click.Path(exists=True),default=None, help='set rife-ncnn-vulkan binary path')
-@click.option("--rife-models", type=str,default="rife-anime", help='set rife-ncnn-vulkan models path',show_default=True)
-@click.option("--gpu-id", type=str,default="auto", help='gpu device to use (-1=cpu) can be 0,1,2 for multi-gpu',show_default=True)
-@click.option("--j-threads", type=str,default="1:2:2", help='thread count for load/proc/save, can be 1:2,2,2:2 for multi-gpu',show_default=True)
 @click.option("--resolution",'--res', type=str, help='resolution for output video',default="3840x2160",show_default=True)
 @click.option("--fps", type=float, help='fps (frames per second) for output video',default=60,show_default=True)
-@click.option("--log-level", type=str, help='set log level',default="WARNING",show_default=True)
-@click.option("--log-file", type=str, help='set log file instead of log to stderr',default=None)
-@click.option('--yes', default=False,type=click.BOOL, is_flag=True,help='overwrite distination file',show_default=True)
+#env options
+@click.option("--temp-dir",'--temp', type=click.Path(exists=True),default=None, help='set temp directory for converter')
+@click.option("--ffmpeg-bin-dir","--ffmpeg", type=click.Path(exists=True),default=None, help='set ffmpeg binary directory (not binary file!), will assume this directory contain ffprobe as well')
+@click.option("--realcugan", type=click.Path(exists=True),default=None, help='set realcuga-ncnn-vulkan binary path')
+@click.option("--rife", type=click.Path(exists=True),default=None, help='set rife-ncnn-vulkan binary path')
+#realcugan options
+@click.option("--realcugan-models", type=str,default="models-se", help='set realcuga-ncnn-vulkan models path',show_default=True)
+@click.option("--noise-level","--noise", type=click.IntRange(-1, 3),default=-1, help='set realcuga-ncnn-vulkan denoise level',show_default=True)
+#rife options
+@click.option("--rife-models", type=str,default="rife-anime", help='set rife-ncnn-vulkan models path',show_default=True)
+#ncnn common options
+@click.option("--gpu-id", type=str,default="auto", help='gpu device to use (-1=cpu) can be 0,1,2 for multi-gpu',show_default=True)
+@click.option("--j-threads", type=str,default="1:2:2", help='thread count for load/proc/save, can be 1:2,2,2:2 for multi-gpu',show_default=True)
+#log options
+@click.option("--log-level", type=click.Choice(['DEBUG', 'INFO','WARNING','ERROR','CRITICAL'], case_sensitive=False), help='set log level',default="WARNING",show_default=True)
+@click.option("--log-file", type=click.Path(), help='set log file instead of log to stderr',default=None)
+#others
+@click.option('--if-exist', default="skip",type=click.Choice(['skip', 'overwrite',"exit"], case_sensitive=False),help='defind what to do when output file exist',show_default=True)
+#parallel options: If both not specificed, will use parallel mode when not using CPU in ncnn-vulkans. If you use CPU (-1 in gpu-id) in ncnn-vulkans, will use serial mode. 
+@click.option('--parallel',"--par","parallel", default=None,type=click.BOOL, is_flag=True,help='parallel running ffmpeg and ncnn-vulkans',flag_value=True)
+@click.option('--serial',"--ser","parallel",default=None,type=click.BOOL, is_flag=True,help='serial running ffmpeg and ncnn-vulkans',flag_value=False)
 @click.pass_context
-def main(ctx,input,refps,output,temp_dir,ffmpeg_bin,realcugan,realcugan_models,noise_level,rife,rife_models,gpu_id,j_threads,resolution,fps,log_level,log_file,yes):
+def main(ctx,input,refps,refps_round,output,temp_dir,ffmpeg_bin_dir,realcugan,realcugan_models,noise_level,rife,rife_models,gpu_id,j_threads,resolution,fps,log_level,log_file,if_exist,parallel):
     """Combine realcugan rife and ffmpeg to upscale and frame interpolation for anime video in one command \n
     Any option not listed below will be passed to ffmpeg, if it's not a ffmpeg option, convertion will failed! 
     """
@@ -100,10 +112,14 @@ def main(ctx,input,refps,output,temp_dir,ffmpeg_bin,realcugan,realcugan_models,n
         realcugan_ncnn_vulkan.set_binpath(realcugan)
     if rife:
         rife_ncnn_vulkan.set_binpath(rife)
-    if ffmpeg_bin:
+    if ffmpeg_bin_dir:
+        ffmpeg_bin=os.path.join(ffmpeg_bin_dir,"ffmpeg")
+        ffprobe_bin=os.path.join(ffmpeg_bin_dir,"ffprobe")
         converter.set_ffmpeg_cmd(ffmpeg_bin)
+        converter.set_ffprobe_cmd(ffprobe_bin)
     
-
+    if parallel==None and "-1" not in gpu_id:
+        parallel=True
 
     for input_file in input_files:
         if os.path.isdir(output):
@@ -116,17 +132,27 @@ def main(ctx,input,refps,output,temp_dir,ffmpeg_bin,realcugan,realcugan_models,n
             logging.critical("output: %s"%output)
             raise ValueError("input and output must be same type, both file or both dir!")
 
+        if os.path.exists(output_file):
+            if_exist=if_exist.lower()
+            if if_exist=="skip":
+                logging.info("skipped output file %s"%output_file)
+                continue
+            elif if_exist=="exit":
+                logging.WARNING("exiting because existed output file %s"%output_file)
+                sys.exit(1)
+
+
         input_res,input_fps=get_res_fps(input_file)
         if refps:
             input_fps=refps
         w_scale=target_res[0]/input_res[0]
         h_scale=target_res[1]/input_res[1]
         if w_scale!=h_scale:
-            logging.WARNING("input %sx%s and output %s is not the same ratio, it might be a problem"%(input_res[0],input_res[1],resolution))
+            logging.warning("input %sx%s and output %s is not the same ratio, it might be a problem"%(input_res[0],input_res[1],resolution))
         res_scale=math.ceil((w_scale+h_scale)/2)
         time_scale=round(fps/input_fps)
         
-        conv_obj=converter(input_file).ffmpeg_v2p(target_fps=refps)
+        conv_obj=converter(input_file).ffmpeg_v2p(target_fps=refps,round=refps_round)
         if res_scale in (2,3,4):
             conv_obj.realcugan(scale=res_scale,noise=noise_level,model=realcugan_models,gpu_id=gpu_id,j_threads=j_threads)
         elif res_scale in (5,6):
@@ -143,7 +169,7 @@ def main(ctx,input,refps,output,temp_dir,ffmpeg_bin,realcugan,realcugan_models,n
         if time_scale>=2:
             conv_obj.rife(model=rife_models,gpu_id=gpu_id,j_threads=j_threads)
 
-        conv_obj.ffmpeg_p2v(output=output_file,overwrite_output=yes,**ffmpeg_args).run()
+        conv_obj.ffmpeg_p2v(output=output_file,overwrite_output=True,**ffmpeg_args).run(parallel)
 
 
 

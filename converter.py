@@ -1,6 +1,4 @@
 #!/bin/python3
-from cmath import log
-from concurrent.futures import process
 import os,sys
 import psutil
 import time
@@ -11,6 +9,7 @@ from uuid import uuid1
 import math
 from re import split,sub
 from copy import deepcopy
+import threading
 
 import importlib.util
 MODULE_PATH = os.path.join(os.path.dirname(__file__),"ffmpeg-python","ffmpeg","__init__.py")
@@ -58,6 +57,7 @@ class converter():
     time_interval=5
     frames_interval=200
     ffmpeg_cmd="ffmpeg"
+    ffprobe_cmd="ffprobe"
 
     @classmethod
     def set_temp_dir(cls,dir):
@@ -71,6 +71,10 @@ class converter():
     @classmethod
     def set_ffmpeg_cmd(cls,ffmpeg_cmd):
         cls.ffmpeg_cmd=ffmpeg_cmd
+    @classmethod
+    def set_ffprobe_cmd(cls,ffprobe_cmd):
+        cls.ffprobe_cmd=ffprobe_cmd
+
 
     @staticmethod
     def get_png_num(dir):
@@ -83,11 +87,46 @@ class converter():
                     continue
                 num+=1
         return num
+    
+    @staticmethod
+    def proc_wait_log(proc,stderr=None):
+        cmd=get_proc_cmd(proc)
+        proc.wait()
+        proc.poll()
+        if proc.returncode!=0:
+            logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s"%(cmd,proc.returncode))
+            logging.critical("You might want to check its stderr %s"%stderr.name)
+            raise RuntimeError("subprocess exited none-zero return code %s"%proc.returncode)
+        else:
+            logging.info("ChildProcess Exiting Normally, cmdline %s"%cmd)
+            f=stderr
+            f.close()
+            os.remove(f.name)
+            logging.debug("removed ChildProcess stderr log %s"%f.name)
+        
+            input_file=proc.args[proc.args.index("-i")+1]
+            if not os.path.exists(input_file):
+                dirname=os.path.dirname(input_file)
+                pattern=os.path.basename(input_file)
+                converter.remove_temp_dir(dirname,pattern)
+            elif os.path.isdir(input_file):
+                num=len(os.listdir(input_file))
+                file_length=math.ceil(math.log(num,10))
+                key="%0"+str(file_length)+"d.png"
+                converter.remove_temp_dir(input_file,key)
 
     @staticmethod
-    def get_videofile_frames(file,ffprobe="ffprobe"):
+    def check_file_has_audio(file):
+        info=ffmpeg.probe(file,cmd=converter.ffprobe_cmd,select_streams="a")
+        if len(info["streams"])==0:
+            return False
+        else:
+            return True
+
+    @staticmethod
+    def get_videofile_frames(file):
         try:
-            info=ffmpeg.probe(file,cmd=ffprobe,select_streams="v:0")
+            info=ffmpeg.probe(file,cmd=converter.ffprobe_cmd,select_streams="v:0")
             stream=info["streams"][0]
             fr_temp=stream['avg_frame_rate'].split("/")
             fr_temp[0]=int(fr_temp[0])
@@ -96,7 +135,7 @@ class converter():
             try:
                 frames=int(stream['nb_frames'])
             except KeyError:
-                cmd=(ffprobe,"-v","error","-select_streams","v:0","-count_packets","-show_entries","stream=nb_read_packets","-of","csv=p=0",file)
+                cmd=(converter.ffprobe_cmd,"-v","error","-select_streams","v:0","-count_packets","-show_entries","stream=nb_read_packets","-of","csv=p=0",file)
                 logging.debug("cannot get frames from ffmpeg.ffprobe, try get it from command line, cmd %s"%" ".join(cmd))
                 p=subprocess.Popen(cmd,stdout=subprocess.PIPE)
                 p.wait()
@@ -202,14 +241,16 @@ class converter():
         logging.info("generated temp dir %s"%output)
         return output
     @staticmethod
-    def remove_temp_dir(dir,num,key):
-        for i in range(1,num+1):
+    def remove_temp_dir(dir,key,num=float("Inf")):
+        i=1
+        while i<=num:
             filename=key%i
             full_filename=os.path.join(dir,filename)
             try:
                 os.remove(full_filename)
+                i+=1
             except FileNotFoundError:
-                pass
+                break
         try:
             os.rmdir(dir)
             logging.debug("removed temp dir %s"%dir)
@@ -243,7 +284,7 @@ class converter():
         if output==None:
             output=self.gen_temp_dir()
 
-        logfilename=os.path.join(output,"stderr.log")
+        logfilename=os.path.join(converter.temp_dir,os.path.basename(output)+"_stderr.log")
         logfile=open(logfilename,"w+",encoding="utf8")
         self.current["file"]=str(output)
         output_arg=os.path.join(output,self.gen_pattern_format())
@@ -253,7 +294,7 @@ class converter():
         else:
             run_obj=input_obj.filter("fps",fps=target_fps,round=round).output(output_arg)
         
-        if hasattr(input_obj,"audio"):
+        if converter.check_file_has_audio(input):
             self.audio=input_obj.audio
             
 
@@ -367,9 +408,9 @@ class converter():
         })
         return self
 
-    def run(self,sync=True):#no async for now
+    def run(self,parallel=False):#working on parallel mode
         try:
-            if sync:
+            if not parallel:
                 for line in self.query:
                     proc=line["obj"].run_async(**line["args"])
                     line.update({"proc":proc})
@@ -385,29 +426,27 @@ class converter():
                     else:
                         logging.info("ChildProcess Exiting Normally, cmdline %s"%cmd)
                         f=line["args"]["pipe_stderr"]
-                        fname=f.name
                         f.close()
-                        os.remove(fname)
+                        os.remove(f.name)
                         logging.debug("removed ChildProcess stderr log %s"%f.name)
                     
                         index=self.query.index(line)
                         if index!=0:
                             current=self.query[index-1]["current"]
-                            converter.remove_temp_dir(current["file"],current["frames"],current["pattern_format"])
+                            converter.remove_temp_dir(current["file"],current["pattern_format"],current["frames"])
             else:
-                flag=False
-                for line in self.query:
+                for i in range(len(self.query)):
+                    line=self.query[i]
                     proc=line["obj"].run_async(**line["args"])
                     line.update({"proc":proc})
                     cmd=get_proc_cmd(proc)
                     logging.debug("ChildProcess Started, cmdline %s, pid %s, log %s"%(cmd,proc.pid,line["args"]["pipe_stderr"].name))
-
-                    if flag:
+                    threading.Thread(target=converter.proc_wait_log,args=(proc,line["args"]["pipe_stderr"])).start()
+                    if os.path.basename(proc.args[0])=="ffmpeg":
                         if sys.platform=="win32":
                             psutil.Process(proc.pid).nice(psutil.IDLE_PRIORITY_CLASS)
                         else:
                             psutil.Process(proc.pid).nice(-20)
-                        flag=False
                     else:
                         if sys.platform=="win32":
                             psutil.Process(proc.pid).nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
@@ -416,8 +455,19 @@ class converter():
 
                 
                     results=self.progress_bar(0)
-                    while proc.returncode==None and (results[proc][2]<self.time_interval or results[proc][0]<self.frames_interval):
+                    flag=False
+                    while flag or proc.returncode==None and (results[proc][2]<self.time_interval or results[proc][0]<self.frames_interval):
                         results=self.progress_bar(1)
+                        try:
+                            next_name=str(self.query[i+1]["obj"])
+                        except IndexError:
+                            break
+                        if next_name!="ncnn-vulkan":
+                            next_name="ffmpeg"
+                        else: 
+                            next_name="vulkan"
+                        current_names=[os.path.basename(proc.args[0]).split("-")[-1] for proc in results]
+                        flag=next_name in current_names
                         self.progress_contorl(results)
 
     
@@ -446,15 +496,21 @@ class converter():
             proc_former=procs[index-1]
             if proc.returncode==None:
                 p=psutil.Process(pid=proc.pid)
-                status=p.status()
-                if status=="running" and results[proc][0] > results[proc_former][0]+self.frames_interval:
+
+                if results[proc][0] > results[proc_former][0]-self.frames_interval:
                     p.suspend()
-                    status=p.status()
                     logging.debug("paused process pid %s"%proc.pid)
-                elif status=="sleeping" and results[proc][0] <= results[proc_former][0]+self.frames_interval:
+                elif results[proc][0] <= results[proc_former][0]-self.frames_interval:
                     p.resume()
-                    status=p.status()
                     logging.debug("resumed process pid %s"%proc.pid)
+        if procs_num==1:
+            proc=procs[0]
+            if proc.poll()==None and os.path.basename(proc.args[0])=="ffmpeg":
+                p=psutil.Process(pid=proc.pid)
+                p.resume()
+                logging.debug("resumed process pid %s"%proc.pid)
+
+
 
 
     def progress_bar(self,time=0):
@@ -475,8 +531,12 @@ class converter():
         loop.run_until_complete(asyncio.wait(tasks))
 
         for proc in results:
-            result=results[proc].result()
-            results.update({proc:result})
+            try:
+                result=results[proc].result()
+                results.update({proc:result})
+            except psutil.NoSuchProcess:
+                continue
+            
 
         converter.progress_bar0(results)
 
@@ -518,4 +578,4 @@ if __name__=="__main__":
     }
     input_file="/mnt/ytb/Wall-E explained by an idiot.mkv"
     #input_file=r"/mnt/temp2/movie/pv_277.mp4"
-    converter(input_file).ffmpeg_v2p(target_fps=12).ffmpeg_p2v("/mnt/temp/test.mp4",overwrite_output=True).run(sync=False)
+    converter(input_file).ffmpeg_v2p(target_fps=12).ffmpeg_p2v("/mnt/temp/test.mp4",overwrite_output=True).run(parallel=True)

@@ -96,6 +96,9 @@ class ncnn_vulkan():
             cmd.append(str(kwargs[arg]))
         return subprocess.Popen(cmd,stderr=pipe_stderr,stdout=subprocess.DEVNULL)
 
+    def __str__(self) -> str:
+        return "ncnn-vulkan"
+
 
 class realcugan_ncnn_vulkan(ncnn_vulkan):
     binpath="realcugan-ncnn-vulkan"
