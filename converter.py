@@ -408,7 +408,7 @@ class converter():
         })
         return self
 
-    def run(self,parallel=False):#working on parallel mode
+    def run(self,parallel=False):
         try:
             if not parallel:
                 for line in self.query:
@@ -469,7 +469,6 @@ class converter():
                         current_names=[os.path.basename(proc.args[0]).split("-")[-1] for proc in results]
                         flag=next_name in current_names
                         self.progress_contorl(results)
-
     
                 while True:
                     results=self.progress_bar(1)
@@ -478,13 +477,15 @@ class converter():
                     if not None in polls:
                         break
 
-
-
-
-        except:
+            logging.info("All process finish, process output file %s successful"%self.query[-1]["current"]["file"])
+        except Exception as e:
+            logging.error("Enconter error %s, terminating ChildProcesses"%e)
             for line in self.query:
                 if "proc" in line:
-                    line["proc"].terminate()
+                    proc=line["proc"]
+                    proc.terminate()
+                    cmd=get_proc_cmd(proc)
+                    logging.info("Terminated ChildProcess pid %s, cmd %s"%(proc.pid,cmd))
             raise
                     
 
@@ -544,38 +545,5 @@ class converter():
 
 
 
-
-
-
-
-        
-
-
-
 if __name__=="__main__":
-
-    try:
-        os.remove("/mnt/temp/test.log")
-    except FileNotFoundError:
-        pass
-    LOG_FORMAT = "%(asctime)s.%(msecs)03d %(name)s: [%(levelname)s] %(pathname)s | %(message)s "
-    DATE_FORMAT = '%Y-%m-%d %H:%M:%S' 
-    log_level=logging.DEBUG
-    logging.basicConfig(level=log_level,
-                    format=LOG_FORMAT,
-                    datefmt = DATE_FORMAT,
-                    force=True,
-                    filename="/mnt/temp/test.log")
-    converter.set_time_interval(3)
-    realcugan_ncnn_vulkan.set_binpath("/root/realcugan-ncnn-vulkan/realcugan-ncnn-vulkan")
-    converter.set_temp_dir("/mnt/temp")
-    ffmpeg_args={
-        "codec":"libx264",
-        "pix_fmt":"yuv420p",
-        "refs":0,
-        "x264opts":"b-pyramid=0",
-        "preset":"veryslow"
-    }
-    input_file="/mnt/ytb/Wall-E explained by an idiot.mkv"
-    #input_file=r"/mnt/temp2/movie/pv_277.mp4"
-    converter(input_file).ffmpeg_v2p(target_fps=12).ffmpeg_p2v("/mnt/temp/test.mp4",overwrite_output=True).run(parallel=True)
+    pass
