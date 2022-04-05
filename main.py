@@ -46,7 +46,7 @@ def get_res_fps(video_file):
 @click.option("--resolution",'--res', type=str, help='resolution for output video',default="3840x2160",show_default=True)
 @click.option("--fps", type=float, help='fps (frames per second) for output video',default=60,show_default=True)
 #env options
-@click.option("--temp-dir",'--temp', type=click.Path(exists=True),default=None, help='set temp directory for converter')
+@click.option("--temp-dir",'--temp', type=click.Path(exists=True),default=None, help='set temp directory for aufit',envvar='AUFIT_TEMP')
 @click.option("--ffmpeg-bin-dir","--ffmpeg", type=click.Path(exists=True),default=None, help='set ffmpeg binary directory (not binary file!), will assume this directory contain ffprobe as well')
 @click.option("--realcugan", type=click.Path(exists=True),default=None, help='set realcuga-ncnn-vulkan binary path')
 @click.option("--rife", type=click.Path(exists=True),default=None, help='set rife-ncnn-vulkan binary path')
@@ -71,7 +71,7 @@ def main(ctx,input,refps,refps_round,output,temp_dir,ffmpeg_bin_dir,realcugan,re
     """Combine realcugan rife and ffmpeg to upscale and frame interpolation for anime video in one command \n
     Any option not listed below will be passed to ffmpeg, if it's not a ffmpeg option, convertion will failed! 
     """
-    LOG_FORMAT = "%(asctime)s.%(msecs)03d %(name)s: [%(levelname)s] %(pathname)s | %(message)s "
+    LOG_FORMAT = "%(asctime)s.%(msecs)03d [%(levelname)s] %(pathname)s | %(message)s "
     DATE_FORMAT = '%Y-%m-%d %H:%M:%S' 
     log_level=eval("logging.%s"%log_level.upper())
     logging.basicConfig(level=log_level,
@@ -98,8 +98,11 @@ def main(ctx,input,refps,refps_round,output,temp_dir,ffmpeg_bin_dir,realcugan,re
     ffmpeg_args.update({"s":resolution})
     logging.debug("Get ffmpeg_args %s"%ffmpeg_args)
 
-    target_res=resolution.split("x")
-    target_res=int(target_res[0]),int(target_res[1])
+    if "x" in resolution:
+        target_res=resolution.split("x")
+        target_res=int(target_res[0]),int(target_res[1])
+    else:
+        logging.critical("incorrect resolution %s"%resolution)
 
     if os.path.isfile(input):
         input_files=[input]
@@ -119,6 +122,7 @@ def main(ctx,input,refps,refps_round,output,temp_dir,ffmpeg_bin_dir,realcugan,re
         converter.set_ffprobe_cmd(ffprobe_bin)
     
     if parallel==None and "-1" not in gpu_id:
+        logging.debug("set parrellel to True because not using cpu for ncnns")
         parallel=True
 
     for input_file in input_files:
@@ -135,10 +139,10 @@ def main(ctx,input,refps,refps_round,output,temp_dir,ffmpeg_bin_dir,realcugan,re
         if os.path.exists(output_file):
             if_exist=if_exist.lower()
             if if_exist=="skip":
-                logging.info("skipped output file %s"%output_file)
+                logging.info("skipped existed output file %s"%output_file)
                 continue
             elif if_exist=="exit":
-                logging.WARNING("exiting because existed output file %s"%output_file)
+                logging.warning("exiting because existed output file %s"%output_file)
                 sys.exit(1)
 
 
@@ -150,7 +154,9 @@ def main(ctx,input,refps,refps_round,output,temp_dir,ffmpeg_bin_dir,realcugan,re
         if w_scale!=h_scale:
             logging.warning("input %sx%s and output %s is not the same ratio, it might be a problem"%(input_res[0],input_res[1],resolution))
         res_scale=math.ceil((w_scale+h_scale)/2)
+        logging.debug("resolution scale %s"%res_scale)
         time_scale=round(fps/input_fps)
+        logging.debug("time scale %s"%time_scale)
         
         conv_obj=converter(input_file).ffmpeg_v2p(target_fps=refps,round=refps_round)
         if res_scale in (2,3,4):
@@ -162,7 +168,7 @@ def main(ctx,input,refps,refps_round,output,temp_dir,ffmpeg_bin_dir,realcugan,re
         elif res_scale==1:
             pass
         else:
-            logging.WARNING("not support scale larger than 8, current scale %s, doing scale=8 anyway"%res_scale)
+            logging.warning("not support scale larger than 8, current scale %s, doing scale=8 anyway"%res_scale)
             conv_obj.realcugan(scale=8)
         
         #I need to know if rife support any other scale other than 2
@@ -170,6 +176,14 @@ def main(ctx,input,refps,refps_round,output,temp_dir,ffmpeg_bin_dir,realcugan,re
             conv_obj.rife(model=rife_models,gpu_id=gpu_id,j_threads=j_threads)
 
         conv_obj.ffmpeg_p2v(output=output_file,overwrite_output=True,**ffmpeg_args).run(parallel)
+
+
+        check_file=os.path.join(converter.temp_dir,"aufit.quit")
+        if os.path.exists(check_file):
+            if os.path.getsize(check_file)==0:
+                os.remove(check_file)
+            logging.debug("detected quit file %s, exiting"%check_file)
+            sys.exit(0)
 
 
 

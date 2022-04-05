@@ -10,6 +10,7 @@ import math
 from re import split,sub
 from copy import deepcopy
 import threading
+from  traceback import format_exc
 
 import importlib.util
 MODULE_PATH = os.path.join(os.path.dirname(__file__),"ffmpeg-python","ffmpeg","__init__.py")
@@ -39,7 +40,7 @@ def multi_touch_png(dir,num,key="%05d.png"):
 def get_proc_cmd(proc):
     cmd=""
     for arg in proc.args:
-        if " " in arg:
+        if " " in arg or "\\" in arg:
             cmd+="'%s' "%arg
         else:
             cmd+="%s "%arg
@@ -52,7 +53,7 @@ class converter():
         logging.debug("current OS is windows")
     else:
         temp_dir="/tmp"
-        logging.debug("current OS is None-windows")
+        logging.debug("current OS is %s"%sys.platform)
 
     time_interval=5
     frames_interval=200
@@ -61,18 +62,23 @@ class converter():
 
     @classmethod
     def set_temp_dir(cls,dir):
+        logging.debug("set temp_dir to %s"%dir)
         cls.temp_dir=dir
     @classmethod
     def set_time_interval(cls,interval):
+        logging.debug("set time_interval to %s"%interval)
         cls.time_interval=interval
     @classmethod
     def set_frames_interval(cls,interval):
+        logging.debug("set frames_interval to %s"%interval)
         cls.frames_interval=interval
     @classmethod
     def set_ffmpeg_cmd(cls,ffmpeg_cmd):
+        logging.debug("set ffmpeg_cmd to %s"%ffmpeg_cmd)
         cls.ffmpeg_cmd=ffmpeg_cmd
     @classmethod
     def set_ffprobe_cmd(cls,ffprobe_cmd):
+        logging.debug("set ffprobe_cmd to %s"%ffprobe_cmd)
         cls.ffprobe_cmd=ffprobe_cmd
 
 
@@ -207,6 +213,7 @@ class converter():
 
 
     def __init__(self,input_file,framerate=None) -> None:
+        logging.info("starting process input file %s"%input_file)
         self.current={
             "file":input_file,
             "frames":0,
@@ -215,6 +222,7 @@ class converter():
             "pattern_format":None
             }
         if os.path.isdir(input_file) and type(framerate) in (int,float):
+            logging.debug("input %s is directory"%input_file)
             self.current["frames"]=converter.get_png_num(input_file)
             self.current["type"]="dirpngs"
             for file in os.listdir(input_file):
@@ -224,6 +232,7 @@ class converter():
             self.current["pattern_format"]="%0"+str(num)+"d.png"
 
         elif os.path.isfile(input_file):
+            logging.debug("input %s is file"%input_file)
             self.current["type"]="videofile"
             self.current["frames"],self.current["framerate"]=converter.get_videofile_frames(input_file)
         else:
@@ -266,7 +275,9 @@ class converter():
             eta_str=ncnn_vulkan.second2hour(eta)
             name=os.path.basename(proc.args[0]).split("-")[0]
             out_str+="[%s %s/%s time used:%s ETA:%s]"%(name,current,total,used_time_str,eta_str)
-        print("\r%s  "%out_str,end="")
+        width=os.get_terminal_size().columns
+        space_num=width-len(out_str)-1
+        print("\r"+out_str+" "*space_num,end="")
 
 
     def gen_pattern_format(self):
@@ -327,7 +338,7 @@ class converter():
                 multi_touch_png(output,num=self.current["frames"],key=self.current["pattern_format"])
 
             obj=realcugan_ncnn_vulkan()
-            logfilename=os.path.join(output,"stderr.log")
+            logfilename=os.path.join(converter.temp_dir,os.path.basename(output)+"_stderr.log")
             logfile=open(logfilename,"w+",encoding="utf8")
             kwargs.update({"pipe_stderr":logfile})
             self.query.append({
@@ -366,7 +377,7 @@ class converter():
             self.current["pattern_format"]=f_pattern_format
 
         obj=rife_ncnn_vulkan()
-        logfilename=os.path.join(output,"stderr.log")
+        logfilename=os.path.join(converter.temp_dir,os.path.basename(output)+"_stderr.log")
         logfile=open(logfilename,"w+",encoding="utf8")
         kwargs.update({"pipe_stderr":logfile})
         self.query.append({
@@ -411,6 +422,7 @@ class converter():
     def run(self,parallel=False):
         try:
             if not parallel:
+                logging.debug("running serial mode")
                 for line in self.query:
                     proc=line["obj"].run_async(**line["args"])
                     line.update({"proc":proc})
@@ -435,13 +447,16 @@ class converter():
                             current=self.query[index-1]["current"]
                             converter.remove_temp_dir(current["file"],current["pattern_format"],current["frames"])
             else:
+                logging.debug("running parallel mode")
                 for i in range(len(self.query)):
                     line=self.query[i]
                     proc=line["obj"].run_async(**line["args"])
                     line.update({"proc":proc})
                     cmd=get_proc_cmd(proc)
                     logging.debug("ChildProcess Started, cmdline %s, pid %s, log %s"%(cmd,proc.pid,line["args"]["pipe_stderr"].name))
-                    threading.Thread(target=converter.proc_wait_log,args=(proc,line["args"]["pipe_stderr"])).start()
+                    th=threading.Thread(target=converter.proc_wait_log,args=(proc,line["args"]["pipe_stderr"]))
+                    th.start()
+                    line.update({"thread":th})
                     if os.path.basename(proc.args[0])=="ffmpeg":
                         if sys.platform=="win32":
                             psutil.Process(proc.pid).nice(psutil.IDLE_PRIORITY_CLASS)
@@ -478,15 +493,18 @@ class converter():
                         break
 
             logging.info("All process finish, process output file %s successful"%self.query[-1]["current"]["file"])
+        except KeyboardInterrupt:
+            message="Ctrl+C pressed, now exiting"
+            logging.warning(message)
+            print(message)
+            self.close()
+            self.clean()
+            sys.exit(1)
         except Exception as e:
             logging.error("Enconter error %s, terminating ChildProcesses"%e)
-            for line in self.query:
-                if "proc" in line:
-                    proc=line["proc"]
-                    proc.terminate()
-                    cmd=get_proc_cmd(proc)
-                    logging.info("Terminated ChildProcess pid %s, cmd %s"%(proc.pid,cmd))
-            raise
+            logging.error(format_exc())
+            self.close()
+            sys.exit(255)
                     
 
     def progress_contorl(self,results):
@@ -535,14 +553,35 @@ class converter():
             try:
                 result=results[proc].result()
                 results.update({proc:result})
-            except psutil.NoSuchProcess:
+            except (psutil.NoSuchProcess,FileNotFoundError):
                 continue
             
 
         converter.progress_bar0(results)
 
         return results
+    
+    def close(self):
+        for line in self.query:
+            if "thread" in line:
+                line["thread"].stop()
+                logging.debug("Terminated thread %s"%line["thread"])
+            if "proc" in line:
+                proc=line["proc"]
+                proc.terminate()
+                cmd=get_proc_cmd(proc)
+                logging.info("Terminated ChildProcess pid %s, cmd %s"%(proc.pid,cmd))
 
+    def clean(self):
+        for line in self.query:
+            f=line["args"]["pipe_stderr"]
+            f.close()
+            os.remove(f.name)
+            logging.debug("removed ChildProcess stderr log %s"%f.name)
+            index=self.query.index(line)
+            if index!=0:
+                current=self.query[index-1]["current"]
+                converter.remove_temp_dir(current["file"],current["pattern_format"],current["frames"])
 
 
 if __name__=="__main__":
