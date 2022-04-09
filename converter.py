@@ -98,7 +98,9 @@ class converter():
     def proc_wait_log(proc,stderr=None):
         cmd=get_proc_cmd(proc)
         proc.wait()
-        proc.poll()
+        if hasattr(proc,"terminated") and proc.terminated:
+            logging.debug("ChildProcess has been terminated, pid %s, cmd: %s"%(proc.pid,cmd))
+            return
         if proc.returncode!=0:
             logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s"%(cmd,proc.returncode))
             logging.critical("You might want to check its stderr %s"%stderr.name)
@@ -109,7 +111,6 @@ class converter():
             f.close()
             os.remove(f.name)
             logging.debug("removed ChildProcess stderr log %s"%f.name)
-        
             input_file=proc.args[proc.args.index("-i")+1]
             if not os.path.exists(input_file):
                 dirname=os.path.dirname(input_file)
@@ -263,6 +264,8 @@ class converter():
         try:
             os.rmdir(dir)
             logging.debug("removed temp dir %s"%dir)
+        except FileNotFoundError:
+            logging.debug("cannot remove temp dir %s because it doesn't exist"%dir)
         except OSError:
             logging.warning("cannot remove temp dir %s because there are other files in it"%dir)
 
@@ -286,7 +289,7 @@ class converter():
         self.current["pattern_format"]=key+".png"
         return key+".png"
 
-    def ffmpeg_v2p(self,input=None,output=None,target_fps=None,round="up"):
+    def ffmpeg_v2p(self,input=None,output=None,target_fps=None,round="up",**ffmpeg_args):
         if input==None:
             input=self.current["file"]
         if target_fps!=None:
@@ -301,9 +304,9 @@ class converter():
         output_arg=os.path.join(output,self.gen_pattern_format())
         input_obj=ffmpeg.input(input)
         if target_fps==None:
-            run_obj=input_obj.output(output_arg)
+            run_obj=input_obj.output(output_arg,**ffmpeg_args)
         else:
-            run_obj=input_obj.filter("fps",fps=target_fps,round=round).output(output_arg)
+            run_obj=input_obj.filter("fps",fps=target_fps,round=round).output(output_arg,**ffmpeg_args)
         
         if converter.check_file_has_audio(input):
             self.audio=input_obj.audio
@@ -387,7 +390,7 @@ class converter():
         })
         return self
 
-    def ffmpeg_p2v(self,output,input=None,overwrite_output=False,**ffmpeg_args):
+    def ffmpeg_p2v(self,output,input=None,overwrite_output=False,filters=None,**ffmpeg_args):
         if os.path.exists(output) and not overwrite_output:
             logging.error("output file %s a exists, not overwriting. you can use overwrite_output=True to override this"%output)
             raise ValueError("output file %s a exists, not overwriting. you can use overwrite_output=True to override this"%output)
@@ -397,10 +400,16 @@ class converter():
         logname=os.path.basename(output).replace(".","_")+"_ffmpeg_p2v_stderr.log"
         logfilename=os.path.join(self.temp_dir,logname)
         logfile=open(logfilename,"w+",encoding="utf8")
-        streams=[ffmpeg.input(input,r=self.current["framerate"])]
+        stream=ffmpeg.input(input,r=self.current["framerate"])
+        if filters:
+            for line in filters:
+                stream=stream.filter(**line)
+        streams=[stream]
         if hasattr(self,"audio"):
             streams.append(self.audio)
             ffmpeg_args.update({"acodec":"copy"})
+        if "metadata:s:v" not in ffmpeg_args:
+            ffmpeg_args.update({'metadata:s:v':'encoder=github.com/deorth-boffin/aufit'})
         obj=ffmpeg.output(*streams,output,**ffmpeg_args)
 
 
@@ -491,14 +500,18 @@ class converter():
                     polls=[proc.returncode for proc in results.keys()]
                     if not None in polls:
                         break
+                for line in self.query:
+                    if "thread" in line:
+                        line["thread"].join()
+
 
             logging.info("All process finish, process output file %s successful"%self.query[-1]["current"]["file"])
         except KeyboardInterrupt:
             message="Ctrl+C pressed, now exiting"
             logging.warning(message)
-            print(message)
             self.close()
             self.clean()
+            print("\n"+message)
             sys.exit(1)
         except Exception as e:
             logging.error("Enconter error %s, terminating ChildProcesses"%e)
@@ -563,20 +576,27 @@ class converter():
     
     def close(self):
         for line in self.query:
-            if "thread" in line:
-                line["thread"].stop()
-                logging.debug("Terminated thread %s"%line["thread"])
             if "proc" in line:
                 proc=line["proc"]
                 proc.terminate()
-                cmd=get_proc_cmd(proc)
-                logging.info("Terminated ChildProcess pid %s, cmd %s"%(proc.pid,cmd))
+                proc.terminated=True
 
     def clean(self):
         for line in self.query:
             f=line["args"]["pipe_stderr"]
             f.close()
-            os.remove(f.name)
+            if os.path.exists(f.name):
+                removed=False
+                times=5
+                while not removed and times>=0:
+                    try:
+                        os.remove(f.name)
+                        removed=True
+                    except PermissionError:
+                        logging.debug("cannot remove %s because permission denied, wait 1s and try again"%f.name)
+                        time.sleep(1)
+                        times-=1
+                        continue
             logging.debug("removed ChildProcess stderr log %s"%f.name)
             index=self.query.index(line)
             if index!=0:
