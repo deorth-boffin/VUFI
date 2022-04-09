@@ -42,7 +42,7 @@ def get_res_fps(video_file):
 #input options
 @click.option("--input",'--in', type=click.Path(exists=True), help='input video file or forder',prompt=True,allow_from_autoenv=False)
 @click.option("--input-refps","--refps", type=float, help='rearrange input video fps via ffmpeg',default=None,show_default=True)
-@click.option("--refps-round","--round", type=str, help='round to use when rearrange input video fps via ffmpeg',default="up",show_default=True)
+@click.option("--refps-round","--round", type=click.Choice(['up', 'down','zero','inf','near']), help='round to use when rearrange input video fps via ffmpeg',default="up",show_default=True)
 #output options
 @click.option("--output",'--out', type=click.Path(), help='output video file or directory',prompt=True,allow_from_autoenv=False)
 @click.option("--output-resolution",'--res', type=str, help='resolution for output video',default="3840x2160",show_default=True,show_envvar=True)
@@ -72,8 +72,8 @@ def get_res_fps(video_file):
 
 @click.pass_context
 def main(ctx,input,input_refps,refps_round,output,temp_dir,ffmpeg_bin_dir,realcugan,realcugan_models,noise_level,rife,rife_models,gpu_id,j_threads,output_resolution,output_fps,log_level,log_file,if_exist,parallel,ffmpeg_threads):
-    """Combine realcugan rife and ffmpeg to upscale and frame interpolation for anime video in one command \n
-    Any option not listed below will be passed to ffmpeg, if it's not a ffmpeg option, convertion will failed! 
+    """Combine realcugan rife and ffmpeg to upscale and frame interpolation for anime video in one command. \n
+    Any option not listed below will be passed to ffmpeg. Or you can set env var AUFIT_FFMPEG_ARGS to do so. If any one of them is not a ffmpeg option, convertion will failed!
     """
     LOG_FORMAT = "%(asctime)s.%(msecs)03d [%(levelname)s] %(pathname)s | %(message)s "
     DATE_FORMAT = '%Y-%m-%d %H:%M:%S' 
