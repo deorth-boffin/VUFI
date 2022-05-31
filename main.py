@@ -3,12 +3,11 @@ import logging
 import os
 import sys
 import click
-from pprint import pprint
 from converter import converter, ffmpeg
 from ncnn_vulkan import *
 import math
 import psutil
-
+import platform
 
 def list_video_file(dir, exts=("mkv", "mp4", "wmv")):
     for file in os.listdir(dir):
@@ -16,9 +15,9 @@ def list_video_file(dir, exts=("mkv", "mp4", "wmv")):
             yield os.path.join(dir, file)
 
 
-def get_res_fps(video_file):
+def get_res_fps(video_file,cmd="ffprobe"):
     try:
-        info = ffmpeg.probe(video_file)
+        info = ffmpeg.probe(video_file,cmd=cmd)
         for stream in info['streams']:
             if stream['avg_frame_rate'] != "0/0":
                 fps_temp = stream['avg_frame_rate'].split("/")
@@ -121,10 +120,13 @@ def main(ctx, input, input_refps, refps_round, output, temp_dir, ffmpeg_bin_dir,
     if rife:
         rife_ncnn_vulkan.set_binpath(rife)
     if ffmpeg_bin_dir:
+        ffprobe_bin= os.path.join(ffmpeg_bin_dir, "ffprobe")
         ffmpeg_bin = os.path.join(ffmpeg_bin_dir, "ffmpeg")
-        ffprobe_bin = os.path.join(ffmpeg_bin_dir, "ffprobe")
+        ffprobe_bin = ffprobe_bin
         converter.set_ffmpeg_cmd(ffmpeg_bin)
         converter.set_ffprobe_cmd(ffprobe_bin)
+    else:
+        ffprobe_bin="ffprobe"
 
     if parallel == None and "-1" not in gpu_id:
         logging.debug("set parrellel to True because not using cpu for ncnns")
@@ -142,10 +144,16 @@ def main(ctx, input, input_refps, refps_round, output, temp_dir, ffmpeg_bin_dir,
             ffmpeg_threads = 0
 
     for input_file in input_files:
-        if os.path.isdir(output):
+        if os.path.isdir(input):
+            if not os.path.exists(output):
+                os.makedirs(output,exist_ok=True)
+            elif os.path.isfile(output):
+                logging.critical("input and output must be same type, both file or both dir!")
+                raise ValueError(
+                "input and output must be same type, both file or both dir!")
             basefile = os.path.basename(input_file)
             output_file = os.path.join(output, basefile)
-        elif len(input_files) == 1 and (os.path.isfile(output) or not os.path.exists(output)):
+        elif os.path.isfile(input) and (os.path.isfile(output) or not os.path.exists(output)):
             output_file = output
         else:
             logging.critical("input: %s" % input)
@@ -163,7 +171,7 @@ def main(ctx, input, input_refps, refps_round, output, temp_dir, ffmpeg_bin_dir,
                     "exiting because existed output file %s" % output_file)
                 sys.exit(1)
 
-        input_res, input_fps = get_res_fps(input_file)
+        input_res, input_fps = get_res_fps(input_file,ffprobe_bin)
         if input_refps:
             input_fps = input_refps
         w_scale = target_res[0]/input_res[0]
