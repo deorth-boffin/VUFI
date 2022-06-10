@@ -440,7 +440,7 @@ class converter():
             ffmpeg_args.update({"acodec": "copy"})
         if "metadata:s:v" not in ffmpeg_args:
             ffmpeg_args.update(
-                {'metadata:s:v': 'encoder=github.com/deorth-boffin/aufit'})
+                {'metadata:s:v': 'encoder=github.com/deorth-kku/aufit'})
         obj = ffmpeg.output(*streams, output, **ffmpeg_args)
 
         kwargs = {
@@ -453,6 +453,34 @@ class converter():
         self.current["pattern_format"] = None
         self.query.append({
             "obj": obj,
+            "args": kwargs,
+            "current": deepcopy(self.current)
+        })
+        return self
+
+    def ffmpeg_p2p_resize(self, width: int, height: int, input: str = None, output: str = None):
+        if input == None:
+            input = os.path.join(
+                self.current["file"], self.current["pattern_format"])
+        if output == None:
+            output = self.gen_temp_dir()
+
+        logfilename = os.path.join(
+            converter.temp_dir, os.path.basename(output)+"_stderr.log")
+        logfile = open(logfilename, "w+", encoding="utf8")
+        self.current["file"] = str(output)
+        output_arg = os.path.join(output, self.gen_pattern_format())
+        input_obj = ffmpeg.input(input)
+
+        run_obj = input_obj.filter("scale", width, height).output(output_arg)
+
+        kwargs = {
+            "cmd": self.ffmpeg_cmd,
+            "quiet": True,
+            "pipe_stderr": logfile
+        }
+        self.query.append({
+            "obj": run_obj,
             "args": kwargs,
             "current": deepcopy(self.current)
         })

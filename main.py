@@ -7,7 +7,7 @@ from converter import converter, ffmpeg
 from ncnn_vulkan import *
 import math
 import psutil
-import platform
+
 
 def list_video_file(dir, exts=("mkv", "mp4", "wmv")):
     for file in os.listdir(dir):
@@ -15,9 +15,9 @@ def list_video_file(dir, exts=("mkv", "mp4", "wmv")):
             yield os.path.join(dir, file)
 
 
-def get_res_fps(video_file,cmd="ffprobe"):
+def get_res_fps(video_file, cmd="ffprobe"):
     try:
-        info = ffmpeg.probe(video_file,cmd=cmd)
+        info = ffmpeg.probe(video_file, cmd=cmd)
         for stream in info['streams']:
             if stream['avg_frame_rate'] != "0/0":
                 fps_temp = stream['avg_frame_rate'].split("/")
@@ -99,7 +99,7 @@ def main(ctx, input, input_refps, refps_round, output, temp_dir, ffmpeg_bin_dir,
                 ffmpeg_args.update({arg: ""})
             else:
                 ffmpeg_args.update({arg: args_list[index+1]})
-    ffmpeg_args.update({"s": output_resolution})
+
     logging.debug("Get ffmpeg_args %s" % ffmpeg_args)
 
     if "x" in output_resolution:
@@ -120,13 +120,13 @@ def main(ctx, input, input_refps, refps_round, output, temp_dir, ffmpeg_bin_dir,
     if rife:
         rife_ncnn_vulkan.set_binpath(rife)
     if ffmpeg_bin_dir:
-        ffprobe_bin= os.path.join(ffmpeg_bin_dir, "ffprobe")
+        ffprobe_bin = os.path.join(ffmpeg_bin_dir, "ffprobe")
         ffmpeg_bin = os.path.join(ffmpeg_bin_dir, "ffmpeg")
         ffprobe_bin = ffprobe_bin
         converter.set_ffmpeg_cmd(ffmpeg_bin)
         converter.set_ffprobe_cmd(ffprobe_bin)
     else:
-        ffprobe_bin="ffprobe"
+        ffprobe_bin = "ffprobe"
 
     if parallel == None and "-1" not in gpu_id:
         logging.debug("set parrellel to True because not using cpu for ncnns")
@@ -146,11 +146,12 @@ def main(ctx, input, input_refps, refps_round, output, temp_dir, ffmpeg_bin_dir,
     for input_file in input_files:
         if os.path.isdir(input):
             if not os.path.exists(output):
-                os.makedirs(output,exist_ok=True)
+                os.makedirs(output, exist_ok=True)
             elif os.path.isfile(output):
-                logging.critical("input and output must be same type, both file or both dir!")
+                logging.critical(
+                    "input and output must be same type, both file or both dir!")
                 raise ValueError(
-                "input and output must be same type, both file or both dir!")
+                    "input and output must be same type, both file or both dir!")
             basefile = os.path.basename(input_file)
             output_file = os.path.join(output, basefile)
         elif os.path.isfile(input) and (os.path.isfile(output) or not os.path.exists(output)):
@@ -171,7 +172,7 @@ def main(ctx, input, input_refps, refps_round, output, temp_dir, ffmpeg_bin_dir,
                     "exiting because existed output file %s" % output_file)
                 sys.exit(1)
 
-        input_res, input_fps = get_res_fps(input_file,ffprobe_bin)
+        input_res, input_fps = get_res_fps(input_file, ffprobe_bin)
         if input_refps:
             input_fps = input_refps
         w_scale = target_res[0]/input_res[0]
@@ -204,8 +205,15 @@ def main(ctx, input, input_refps, refps_round, output, temp_dir, ffmpeg_bin_dir,
 
         # I need to know if rife support any other scale other than 2
         if time_scale >= 2:
+            # down scale png before rife to save time (and avoid possiable vram overflow)
+            if w_scale < float(res_scale) or h_scale < float(res_scale):
+                conv_obj.ffmpeg_p2p_resize(*target_res)
+
             conv_obj.rife(model=rife_models, gpu_id=gpu_id,
                           j_threads=j_threads)
+        elif w_scale != float(res_scale) or h_scale != float(res_scale):
+            # or if there is no rife time scale, use resize in ffmpeg output instead
+            ffmpeg_args.update({"s": output_resolution})
 
         conv_obj.ffmpeg_p2v(output=output_file, overwrite_output=True,
                             threads=ffmpeg_threads, **ffmpeg_args).run(parallel)
