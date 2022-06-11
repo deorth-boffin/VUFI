@@ -8,19 +8,10 @@ import logging
 from ncnn_vulkan import *
 from uuid import uuid1
 import math
-from re import split, sub
 from copy import deepcopy
 import threading
 from traceback import format_exc
-
-import importlib.util
-MODULE_PATH = os.path.join(os.path.dirname(
-    __file__), "ffmpeg-python", "ffmpeg", "__init__.py")
-MODULE_NAME = "ffmpeg"
-spec = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
-ffmpeg = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = ffmpeg
-spec.loader.exec_module(ffmpeg)
+import ffmpeg
 
 
 def touch(file_name):
@@ -104,7 +95,7 @@ class converter():
         return num
 
     @staticmethod
-    def proc_wait_log(proc, stderr=None):
+    def proc_wait_log(proc):
         proc.wait()
         if proc.terminated:
             logging.debug(
@@ -114,16 +105,12 @@ class converter():
             logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s" % (
                 proc.cmd, proc.returncode))
             logging.critical(
-                "You might want to check its stderr %s" % stderr.name)
+                "You might want to check its stderr \n%s" % proc.stderr.read().decode())
             raise RuntimeError(
                 "subprocess exited none-zero return code %s" % proc.returncode)
         else:
             logging.info(
                 "ChildProcess Exiting Normally, cmdline %s" % proc.cmd)
-            f = stderr
-            f.close()
-            os.remove(f.name)
-            logging.debug("removed ChildProcess stderr log %s" % f.name)
             input_file = proc.args[proc.args.index("-i")+1]
             if not os.path.exists(input_file):
                 dirname = os.path.dirname(input_file)
@@ -193,6 +180,8 @@ class converter():
         logfile = proc.stdout
         while proc.poll() == None:
             line = logfile.readline().decode().strip("\n")
+            if line=="":
+                break
             key, value = line.split("=")
             if key == "progress" and value == "end":
                 break
@@ -320,9 +309,6 @@ class converter():
         if output == None:
             output = self.gen_temp_dir()
 
-        logfilename = os.path.join(
-            converter.temp_dir, os.path.basename(output)+"_stderr.log")
-        logfile = open(logfilename, "w+", encoding="utf8")
         self.current["file"] = str(output)
         output_arg = os.path.join(output, self.gen_pattern_format())
         input_obj = ffmpeg.input(input)
@@ -340,7 +326,7 @@ class converter():
         kwargs = {
             "cmd": self.ffmpeg_cmd,
             "pipe_stdout": True,
-            "pipe_stderr": logfile
+            "pipe_stderr": True
         }
         self.query.append({
             "obj": run_obj,
@@ -365,10 +351,8 @@ class converter():
                     output, num=self.current["frames"], key=self.current["pattern_format"])
 
             obj = realcugan_ncnn_vulkan()
-            logfilename = os.path.join(
-                converter.temp_dir, os.path.basename(output)+"_stderr.log")
-            logfile = open(logfilename, "w+", encoding="utf8")
-            kwargs.update({"pipe_stderr": logfile})
+
+            kwargs.update({"pipe_stderr": subprocess.PIPE})
             self.query.append({
                 "obj": obj,
                 "args": kwargs,
@@ -408,10 +392,7 @@ class converter():
             self.current["pattern_format"] = f_pattern_format
 
         obj = rife_ncnn_vulkan()
-        logfilename = os.path.join(
-            converter.temp_dir, os.path.basename(output)+"_stderr.log")
-        logfile = open(logfilename, "w+", encoding="utf8")
-        kwargs.update({"pipe_stderr": logfile})
+        kwargs.update({"pipe_stderr": subprocess.PIPE})
         self.query.append({
             "obj": obj,
             "args": kwargs,
@@ -429,10 +410,6 @@ class converter():
             input = os.path.join(
                 self.current["file"], self.current["pattern_format"])
 
-        logname = os.path.basename(output).replace(
-            ".", "_")+"_ffmpeg_p2v_stderr.log"
-        logfilename = os.path.join(self.temp_dir, logname)
-        logfile = open(logfilename, "w+", encoding="utf8")
         stream = ffmpeg.input(input, r=self.current["framerate"])
         if filters:
             for line in filters:
@@ -452,7 +429,7 @@ class converter():
             "cmd": self.ffmpeg_cmd,
             "pipe_stdout": True,
             "overwrite_output": overwrite_output,
-            "pipe_stderr": logfile
+            "pipe_stderr": True
         }
         self.current["file"] = output
         self.current["pattern_format"] = None
@@ -484,7 +461,7 @@ class converter():
         kwargs = {
             "cmd": self.ffmpeg_cmd,
             "pipe_stdout": True,
-            "pipe_stderr": logfile
+            "pipe_stderr": True
         }
         self.query.append({
             "obj": run_obj,
@@ -504,8 +481,7 @@ class converter():
                     proc.terminated = False
 
                     line.update({"proc": proc})
-                    logging.debug("ChildProcess Started, cmdline %s, pid %s, log %s" % (
-                        proc.cmd, proc.pid, line["args"]["pipe_stderr"].name))
+                    logging.debug("ChildProcess Started, cmdline %s, pid %s" % (proc.cmd, proc.pid))
                     while proc.poll() == None:
                         self.progress_bar(1)
 
@@ -513,15 +489,12 @@ class converter():
                         logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s" % (
                             proc.cmd, proc.returncode))
                         logging.critical(
-                            "You might want to check its stderr %s" % line["args"]["pipe_stderr"].name)
+                            "You might want to check its stderr \n%s" % proc.stderr.read().decode())
                         raise RuntimeError(
                             "subprocess exited none-zero return code %s" % proc.returncode)
                     else:
                         logging.info(
                             "ChildProcess Exiting Normally, cmdline %s" % proc.cmd)
-                        f = line["args"]["pipe_stderr"]
-                        f.close()
-                        os.remove(f.name)
                         logging.debug(
                             "removed ChildProcess stderr log %s" % f.name)
 
@@ -541,10 +514,10 @@ class converter():
                     proc.terminated = False
 
                     line.update({"proc": proc})
-                    logging.debug("ChildProcess Started, cmdline %s, pid %s, log %s" % (
-                        proc.cmd, proc.pid, line["args"]["pipe_stderr"].name))
+                    logging.debug(
+                        "ChildProcess Started, cmdline %s, pid %s" % (proc.cmd, proc.pid))
                     th = threading.Thread(target=converter.proc_wait_log, args=(
-                        proc, line["args"]["pipe_stderr"]))
+                        proc,))
                     th.start()
                     line.update({"thread": th})
                     if os.path.basename(proc.args[0]) == "ffmpeg":
@@ -635,7 +608,7 @@ class converter():
             if "proc" in line and line["proc"].poll() == None:
                 kwargs = {
                     "total": line["current"]["frames"],
-                    "obj":line["obj"]
+                    "obj": line["obj"]
                 }
                 task = loop.create_task(
                     converter.check_proc_progress(line["proc"], **kwargs)
@@ -664,22 +637,6 @@ class converter():
 
     def clean(self):
         for line in self.query:
-            f = line["args"]["pipe_stderr"]
-            f.close()
-            if os.path.exists(f.name):
-                removed = False
-                times = 5
-                while not removed and times >= 0:
-                    try:
-                        os.remove(f.name)
-                        removed = True
-                    except PermissionError:
-                        logging.debug(
-                            "cannot remove %s because permission denied, wait 1s and try again" % f.name)
-                        time.sleep(1)
-                        times -= 1
-                        continue
-            logging.debug("removed ChildProcess stderr log %s" % f.name)
             index = self.query.index(line)
             if index != 0:
                 current = self.query[index-1]["current"]

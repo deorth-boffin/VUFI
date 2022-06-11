@@ -1,3 +1,0 @@
-[submodule "ffmpeg-python"]
-	path = ffmpeg-python
-	url = git@github.com:deorth-boffin/ffmpeg-python.git
