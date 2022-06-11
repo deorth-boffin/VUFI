@@ -105,7 +105,7 @@ class converter():
             logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s" % (
                 proc.cmd, proc.returncode))
             logging.critical(
-                "You might want to check its stderr \n%s" % proc.stderr.read().decode())
+                "You might want to check its stderr, see below \n%s" % proc.stderr.read().decode())
             raise RuntimeError(
                 "subprocess exited none-zero return code %s" % proc.returncode)
         else:
@@ -489,15 +489,12 @@ class converter():
                         logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s" % (
                             proc.cmd, proc.returncode))
                         logging.critical(
-                            "You might want to check its stderr \n%s" % proc.stderr.read().decode())
+                            "You might want to check its stderr, see below \n%s" % proc.stderr.read().decode())
                         raise RuntimeError(
                             "subprocess exited none-zero return code %s" % proc.returncode)
                     else:
                         logging.info(
                             "ChildProcess Exiting Normally, cmdline %s" % proc.cmd)
-                        logging.debug(
-                            "removed ChildProcess stderr log %s" % f.name)
-
                         index = self.query.index(line)
                         if index != 0:
                             current = self.query[index-1]["current"]
