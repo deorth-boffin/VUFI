@@ -64,6 +64,8 @@ class converter():
     ffmpeg_cmd = "ffmpeg"
     ffprobe_cmd = "ffprobe"
 
+    ffmpeg_progess_args = ('-progress', 'pipe:', '-nostats')
+
     @classmethod
     def set_temp_dir(cls, dir):
         logging.debug("set temp_dir to %s" % dir)
@@ -171,61 +173,60 @@ class converter():
         return frames, framerate
 
     @staticmethod
-    def ffmpeg_get_progress(proc, logfile, total=None):
+    def ffmpeg_progress_thread(proc: subprocess.Popen, total: int = None):
         start_time = psutil.Process(pid=proc.pid).create_time()
+        proc.current = 0
+        proc.used_time = 0
+        proc.eta = 0
         if total == None:
             cmds = proc.args
             input = cmds[cmds.index("-i")+1]
 
             if input.endswith("png"):
                 input_dir = os.path.dirname(input)
-                total = converter.get_png_num(input_dir)
+                proc.total = converter.get_png_num(input_dir)
             else:
-                total, fps = converter.get_videofile_frames(input)
+                proc.total, _ = converter.get_videofile_frames(input)
+        else:
+            proc.total = total
 
-        current = 0
-        speed = 0
-        logfile.seek(0)
-        while True:
-            line = logfile.readline()
-            if line == "":
+        logfile = proc.stdout
+        while proc.poll() == None:
+            line = logfile.readline().decode().strip("\n")
+            key, value = line.split("=")
+            if key == "progress" and value == "end":
                 break
-            line = sub(r"= *", r"=", line)
-            line = split("[ =]", line)
-            if line[0] != 'frame':
-                continue
-            try:
-                current = int(line[1])
-            except ValueError:
-                current = 0
-            if current > total+1:
-                logging.debug(
-                    "impossable value current/total %s/%s, gonna retry" % (current, total))
-                continue
-            used_time = time.time()-start_time
-            speed = current/used_time
-            if speed == float(0):
-                eta = 0
+            elif key == "frame":
+                proc.current = int(value)
             else:
-                eta = (total-current)/speed
-
-        try:
-            return current, total, used_time, eta
-        except UnboundLocalError:
-            logging.debug(
-                "cannot get current framecount from stderr, returning defaults")
-            return 0, total, time.time()-start_time, 0
+                continue
+            proc.used_time = time.time()-start_time
+            speed = proc.current/proc.used_time
+            if speed == float(0):
+                proc.eta = 0
+            else:
+                proc.eta = (proc.total-proc.current)/speed
 
     @staticmethod
-    async def check_proc_progress(proc, total=None, logfile=None):
+    def ffmpeg_get_progress(proc, total=None):
+        if hasattr(proc, "total"):
+            return proc.current, proc.total, proc.used_time, proc.eta
+        else:
+            t = threading.Thread(
+                target=converter.ffmpeg_progress_thread, args=(proc, total))
+            t.start()
+            while not hasattr(proc, "total"):
+                time.sleep(0.1)
+            return proc.current, proc.total, proc.used_time, proc.eta
+
+    @staticmethod
+    async def check_proc_progress(proc, obj, total=None):
         cmd = proc.args[0]
         try:
             if "ffmpeg" in cmd:
-                return converter.ffmpeg_get_progress(proc, logfile, total)
-            elif "realcugan-ncnn-vulkan" in cmd:
-                return ncnn_vulkan.get_progress(proc, total=total)
-            elif "rife-ncnn-vulkan" in cmd:
-                return ncnn_vulkan.get_progress(proc, times=2, total=total)
+                return converter.ffmpeg_get_progress(proc, total)
+            else:
+                return obj.get_progress()
         except psutil.NoSuchProcess:
             return (0, 0, 0, 0)
 
@@ -331,12 +332,14 @@ class converter():
             run_obj = input_obj.filter("fps", fps=target_fps, round=round).output(
                 output_arg, **ffmpeg_args)
 
+        run_obj = run_obj.global_args(*self.ffmpeg_progess_args)
+
         if converter.check_file_has_audio(input):
             self.audio = input_obj.audio
 
         kwargs = {
             "cmd": self.ffmpeg_cmd,
-            "quiet": True,
+            "pipe_stdout": True,
             "pipe_stderr": logfile
         }
         self.query.append({
@@ -441,18 +444,20 @@ class converter():
         if "metadata:s:v" not in ffmpeg_args:
             ffmpeg_args.update(
                 {'metadata:s:v': 'encoder=github.com/deorth-kku/aufit'})
-        obj = ffmpeg.output(*streams, output, **ffmpeg_args)
+        run_obj = ffmpeg.output(*streams, output, **ffmpeg_args)
+
+        run_obj = run_obj.global_args(*self.ffmpeg_progess_args)
 
         kwargs = {
             "cmd": self.ffmpeg_cmd,
-            "quiet": True,
+            "pipe_stdout": True,
             "overwrite_output": overwrite_output,
             "pipe_stderr": logfile
         }
         self.current["file"] = output
         self.current["pattern_format"] = None
         self.query.append({
-            "obj": obj,
+            "obj": run_obj,
             "args": kwargs,
             "current": deepcopy(self.current)
         })
@@ -474,9 +479,11 @@ class converter():
 
         run_obj = input_obj.filter("scale", width, height).output(output_arg)
 
+        run_obj = run_obj.global_args(*self.ffmpeg_progess_args)
+
         kwargs = {
             "cmd": self.ffmpeg_cmd,
-            "quiet": True,
+            "pipe_stdout": True,
             "pipe_stderr": logfile
         }
         self.query.append({
@@ -594,7 +601,7 @@ class converter():
             logging.error("Enconter error %s, terminating ChildProcesses" % e)
             logging.error(format_exc())
             self.close()
-            sys.exit(255)
+            raise e
 
     def progress_contorl(self, results):
         procs = list(results.keys())
@@ -628,7 +635,7 @@ class converter():
             if "proc" in line and line["proc"].poll() == None:
                 kwargs = {
                     "total": line["current"]["frames"],
-                    "logfile": line["args"]["pipe_stderr"]
+                    "obj":line["obj"]
                 }
                 task = loop.create_task(
                     converter.check_proc_progress(line["proc"], **kwargs)

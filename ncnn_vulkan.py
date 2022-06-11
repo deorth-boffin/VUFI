@@ -6,6 +6,8 @@ import time
 import asyncio
 import logging
 import platform
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 
 class ncnn_vulkan():
@@ -32,12 +34,10 @@ class ncnn_vulkan():
         hour = input_second//3600
         return "%d:%02d:%02d" % (hour, minute, second)
 
-    @staticmethod
-    def progress_bar(proc, times=1, interval=1):
-        while proc.poll() == None:
+    def progress_bar(self, interval=1):
+        while self.proc.poll() == None:
             co = asyncio.sleep(interval)
-            current, total, used_time, eta = ncnn_vulkan.get_progress(
-                proc, times)
+            current, total, used_time, eta = self.get_progress()
             used_time_str = ncnn_vulkan.second2hour(used_time)
             eta_str = ncnn_vulkan.second2hour(eta)
             print("[%s/%s time used:%s ETA:%s]" %
@@ -46,35 +46,19 @@ class ncnn_vulkan():
             loop = asyncio.get_event_loop()
             loop.run_until_complete(co)
 
-        if proc.poll() != 0:
-            cmds = proc.args
+        if self.proc.poll() != 0:
+            cmds = self.proc.args
             print(cmds)
 
-    @staticmethod
-    def get_progress(proc, times=1, total=None):
-        psProcess = psutil.Process(pid=proc.pid)
-        cmds = proc.args
-        indir = cmds[cmds.index("-i")+1]
-        if total == None:
-            total = len(os.listdir(indir))*times
-
-        outdir = cmds[cmds.index("-o")+1]
-        start_time = psProcess.create_time()
-
-        tasks = []
-        for file in os.listdir(outdir):
-            ffile = os.path.join(outdir, file)
-            tasks.append((ncnn_vulkan.get_if_file_changes(ffile, start_time)))
-
-        current = tasks.count(True)
-
-        used_time = time.time()-start_time
-        speed = current/used_time
+    def get_progress(self):
+        used_time = time.time()-self.start_time
+        self.current = len(self.o_files)
+        speed = self.current/used_time
         if speed != 0:
-            eta = (total-current)/speed
+            eta = (self.total-self.current)/speed
         else:
             eta = 0
-        return current, total, used_time, eta
+        return self.current, self.total, used_time, eta
 
     @staticmethod
     def get_if_file_changes(file, start_time):
@@ -82,38 +66,47 @@ class ncnn_vulkan():
         return filetime >= start_time
 
     def run(self, **kwargs):
-        pp = self.run_async(**kwargs)
-        try:
-            ncnn_vulkan.progress_bar(pp)
-        except:
-            pp.terminate()
-            raise
+        self.run_async(**kwargs)
+        self.progress_bar()
 
     def run_async(self, pipe_stderr=subprocess.DEVNULL, **kwargs):
         cmd = [self.binpath]
+        self.input = kwargs.get("input", kwargs.get("i"))
+        self.output = kwargs.get("output", kwargs.get("o"))
         for arg in kwargs:
             cmd.append("-%s" % arg[0])
             cmd.append(str(kwargs[arg]))
-        return subprocess.Popen(cmd, stderr=pipe_stderr, stdout=subprocess.DEVNULL)
+        self.proc = subprocess.Popen(
+            cmd, stderr=pipe_stderr, stdout=subprocess.DEVNULL)
+        self.start_time = psutil.Process(pid=self.proc.pid).create_time()
+        self.total = len(os.listdir(self.input))*self.times
+        self.o_files = set()
+        self.observer = Observer()
+
+        class UpdateCurrent(FileSystemEventHandler):
+            def on_modified(_, event):
+                self.o_files.add(event.src_path)
+        self.observer.schedule(UpdateCurrent(), self.output, recursive=False)
+        self.observer.start()
+
+        return self.proc
 
     def __str__(self) -> str:
         return "ncnn-vulkan"
 
+    def __del__(self) -> None:
+        self.observer.stop()
+        self.proc.terminate()
+
 
 class realcugan_ncnn_vulkan(ncnn_vulkan):
     binpath = "realcugan-ncnn-vulkan"
+    times = 1
 
 
 class rife_ncnn_vulkan(ncnn_vulkan):
     binpath = "rife-ncnn-vulkan"
-
-    def run(self, **kwargs):
-        pp = self.run_async(**kwargs)
-        try:
-            super().progress_bar(pp, times=2)
-        except:
-            pp.terminate()
-            raise
+    times = 2
 
 
 if __name__ == "__main__":
