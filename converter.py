@@ -459,9 +459,6 @@ class converter():
         if output == None:
             output = self.gen_temp_dir()
 
-        logfilename = os.path.join(
-            converter.temp_dir, os.path.basename(output)+"_stderr.log")
-        logfile = open(logfilename, "w+", encoding="utf8")
         self.current["file"] = str(output)
         output_arg = os.path.join(output, self.gen_pattern_format())
         input_obj = ffmpeg.input(input)
