@@ -12,6 +12,7 @@ from copy import deepcopy
 import threading
 from traceback import format_exc
 import ffmpeg
+import tempfile
 
 
 def touch(file_name):
@@ -95,8 +96,17 @@ class converter():
         return num
 
     @staticmethod
-    def proc_wait_log(proc):
+    def proc_wait_log(proc, total=None, obj=None):
+        if "ffmpeg" in proc.cmd:
+            converter.ffmpeg_progress_thread(proc, total)
+
         proc.wait()
+        if hasattr(obj, "observer"):
+            obj.observer.stop()
+        converter.proc_end_log_clean(proc)
+
+    @staticmethod
+    def proc_end_log_clean(proc):
         if proc.terminated:
             logging.debug(
                 "ChildProcess has been terminated, pid %s, cmd: %s" % (proc.pid, proc.cmd))
@@ -104,8 +114,13 @@ class converter():
         if proc.returncode != 0:
             logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s" % (
                 proc.cmd, proc.returncode))
+
+            proc.stderr.seek(0)
+            stderr_text = proc.stderr.read().decode()
+            if sys.platform == "win32":
+                stderr_text = stderr_text.replace("\r\n", "\n")
             logging.critical(
-                "You might want to check its stderr, see below \n%s" % proc.stderr.read().decode())
+                "You might want to check its stderr, see below \n%s" % stderr_text)
             raise RuntimeError(
                 "subprocess exited none-zero return code %s" % proc.returncode)
         else:
@@ -148,7 +163,8 @@ class converter():
                        "-count_packets", "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", file)
                 logging.debug(
                     "cannot get frames from ffmpeg.ffprobe, try get it from command line, cmd %s" % " ".join(cmd))
-                p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+                p = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE)
                 p.wait()
                 frames = int(p.stdout.read())
         except ffmpeg.Error:
@@ -179,11 +195,13 @@ class converter():
 
         logfile = proc.stdout
         while proc.poll() == None:
+            logging.debug(proc.stderr.seekable())
             line = logfile.readline().decode().strip("\n")
-            if line=="":
+            if line == "":
                 break
             key, value = line.split("=")
             if key == "progress" and value == "end":
+                proc.stderr.read()
                 break
             elif key == "frame":
                 proc.current = int(value)
@@ -197,23 +215,17 @@ class converter():
                 proc.eta = (proc.total-proc.current)/speed
 
     @staticmethod
-    def ffmpeg_get_progress(proc, total=None):
-        if hasattr(proc, "total"):
-            return proc.current, proc.total, proc.used_time, proc.eta
-        else:
-            t = threading.Thread(
-                target=converter.ffmpeg_progress_thread, args=(proc, total))
-            t.start()
-            while not hasattr(proc, "total"):
-                time.sleep(0.1)
-            return proc.current, proc.total, proc.used_time, proc.eta
+    def ffmpeg_get_progress(proc):
+        while not hasattr(proc, "total"):
+            time.sleep(0.1)
+        return proc.current, proc.total, proc.used_time, proc.eta
 
     @staticmethod
-    async def check_proc_progress(proc, obj, total=None):
+    async def check_proc_progress(proc, obj):
         cmd = proc.args[0]
         try:
             if "ffmpeg" in cmd:
-                return converter.ffmpeg_get_progress(proc, total)
+                return converter.ffmpeg_get_progress(proc)
             else:
                 return obj.get_progress()
         except psutil.NoSuchProcess:
@@ -352,7 +364,7 @@ class converter():
 
             obj = realcugan_ncnn_vulkan()
 
-            kwargs.update({"pipe_stderr": subprocess.PIPE})
+            kwargs.update({"pipe_stderr": tempfile.SpooledTemporaryFile()})
             self.query.append({
                 "obj": obj,
                 "args": kwargs,
@@ -392,7 +404,7 @@ class converter():
             self.current["pattern_format"] = f_pattern_format
 
         obj = rife_ncnn_vulkan()
-        kwargs.update({"pipe_stderr": subprocess.PIPE})
+        kwargs.update({"pipe_stderr": tempfile.SpooledTemporaryFile()})
         self.query.append({
             "obj": obj,
             "args": kwargs,
@@ -481,25 +493,13 @@ class converter():
                     proc.terminated = False
 
                     line.update({"proc": proc})
-                    logging.debug("ChildProcess Started, cmdline %s, pid %s" % (proc.cmd, proc.pid))
+                    logging.debug(
+                        "ChildProcess Started, cmdline %s, pid %s" % (proc.cmd, proc.pid))
                     while proc.poll() == None:
                         self.progress_bar(1)
 
-                    if proc.returncode != 0:
-                        logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s" % (
-                            proc.cmd, proc.returncode))
-                        logging.critical(
-                            "You might want to check its stderr, see below \n%s" % proc.stderr.read().decode())
-                        raise RuntimeError(
-                            "subprocess exited none-zero return code %s" % proc.returncode)
-                    else:
-                        logging.info(
-                            "ChildProcess Exiting Normally, cmdline %s" % proc.cmd)
-                        index = self.query.index(line)
-                        if index != 0:
-                            current = self.query[index-1]["current"]
-                            converter.remove_temp_dir(
-                                current["file"], current["pattern_format"], current["frames"])
+                    converter.proc_end_log_clean(proc)
+
             else:
                 logging.debug("running parallel mode")
                 for i in range(len(self.query)):
@@ -514,7 +514,7 @@ class converter():
                     logging.debug(
                         "ChildProcess Started, cmdline %s, pid %s" % (proc.cmd, proc.pid))
                     th = threading.Thread(target=converter.proc_wait_log, args=(
-                        proc,))
+                        proc, line["current"]["frames"], line["obj"]))
                     th.start()
                     line.update({"thread": th})
                     if os.path.basename(proc.args[0]) == "ffmpeg":
@@ -550,7 +550,7 @@ class converter():
                 while True:
                     results = self.progress_bar(1)
                     self.progress_contorl(results)
-                    polls = [proc.returncode for proc in results.keys()]
+                    polls = [proc.poll() for proc in results.keys()]
                     if not None in polls:
                         break
                 for line in self.query:
@@ -604,7 +604,6 @@ class converter():
         for line in self.query:
             if "proc" in line and line["proc"].poll() == None:
                 kwargs = {
-                    "total": line["current"]["frames"],
                     "obj": line["obj"]
                 }
                 task = loop.create_task(

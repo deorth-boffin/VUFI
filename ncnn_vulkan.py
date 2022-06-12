@@ -58,6 +58,8 @@ class ncnn_vulkan():
             eta = (self.total-self.current)/speed
         else:
             eta = 0
+        if self.current >= self.total or self.proc.returncode != None:
+            self.observer.stop()
         return self.current, self.total, used_time, eta
 
     @staticmethod
@@ -78,6 +80,8 @@ class ncnn_vulkan():
             cmd.append(str(kwargs[arg]))
         self.proc = subprocess.Popen(
             cmd, stderr=pipe_stderr, stdout=subprocess.DEVNULL)
+        if type(pipe_stderr) != int:
+            self.proc.stderr = pipe_stderr
         self.start_time = psutil.Process(pid=self.proc.pid).create_time()
         self.total = len(os.listdir(self.input))*self.times
         self.o_files = set()
@@ -95,7 +99,8 @@ class ncnn_vulkan():
         return "ncnn-vulkan"
 
     def __del__(self) -> None:
-        self.observer.stop()
+        if hasattr(self, "observer"):
+            self.observer.stop()
         self.proc.terminate()
 
 
