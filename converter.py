@@ -195,7 +195,6 @@ class converter():
 
         logfile = proc.stdout
         while proc.poll() == None:
-            logging.debug(proc.stderr.seekable())
             line = logfile.readline().decode().strip("\n")
             if line == "":
                 break
