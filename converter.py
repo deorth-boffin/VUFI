@@ -195,12 +195,12 @@ class converter():
 
         logfile = proc.stdout
         while proc.poll() == None:
+            proc.stderr.flush()
             line = logfile.readline().decode().strip("\n")
             if line == "":
                 break
             key, value = line.split("=")
             if key == "progress" and value == "end":
-                proc.stderr.read()
                 break
             elif key == "frame":
                 proc.current = int(value)
@@ -438,8 +438,8 @@ class converter():
 
         kwargs = {
             "cmd": self.ffmpeg_cmd,
-            "pipe_stdout": True,
             "overwrite_output": overwrite_output,
+            "pipe_stdout": True,
             "pipe_stderr": True
         }
         self.current["file"] = output
@@ -491,10 +491,12 @@ class converter():
                     line.update({"proc": proc})
                     logging.debug(
                         "ChildProcess Started, cmdline %s, pid %s" % (proc.cmd, proc.pid))
+                    th = threading.Thread(target=converter.proc_wait_log, args=(
+                        proc, line["current"]["frames"], line["obj"]))
+                    th.start()
                     while proc.poll() == None:
                         self.progress_bar(1)
-
-                    converter.proc_end_log_clean(proc)
+                    th.join()
 
             else:
                 logging.debug("running parallel mode")
