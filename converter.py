@@ -201,6 +201,7 @@ class converter():
                 break
             key, value = line.split("=")
             if key == "progress" and value == "end":
+                proc.stderr.detach()
                 break
             elif key == "frame":
                 proc.current = int(value)
