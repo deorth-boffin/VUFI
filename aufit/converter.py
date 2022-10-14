@@ -5,7 +5,7 @@ import psutil
 import time
 import asyncio
 import logging
-from ncnn_vulkan import *
+from .ncnn_vulkan import *
 from uuid import uuid1
 import math
 from copy import deepcopy

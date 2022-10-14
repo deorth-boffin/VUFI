@@ -3,8 +3,8 @@ import logging
 import os
 import sys
 import click
-from converter import converter, ffmpeg
-from ncnn_vulkan import *
+from .converter import converter, ffmpeg
+from .ncnn_vulkan import *
 import math
 import psutil
 
