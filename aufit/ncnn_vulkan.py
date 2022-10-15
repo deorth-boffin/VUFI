@@ -101,7 +101,8 @@ class ncnn_vulkan():
     def __del__(self) -> None:
         if hasattr(self, "observer"):
             self.observer.stop()
-        self.proc.terminate()
+        if hasattr(self, "proc"):
+            self.proc.terminate()
 
 
 class realcugan_ncnn_vulkan(ncnn_vulkan):
