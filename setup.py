@@ -29,6 +29,6 @@ setuptools.setup(
     packages=setuptools.find_packages(),
     python_requires='>=3.9',
     entry_points={
-        'console_scripts': ['aufit=aufit.main:main']
+        'console_scripts': ['aufit=aufit.__main__:main']
     }
 )
