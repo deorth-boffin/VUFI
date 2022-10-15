@@ -56,7 +56,7 @@ class converter():
     ffmpeg_cmd = "ffmpeg"
     ffprobe_cmd = "ffprobe"
 
-    ffmpeg_progess_args = ('-progress', 'pipe:', '-nostats')
+    ffmpeg_progess_args = ('-progress', 'pipe:', '-nostats',"-hide_banner","-loglevel","error")
 
     @classmethod
     def set_temp_dir(cls, dir):
