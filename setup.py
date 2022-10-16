@@ -13,7 +13,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 version=datetime.now().strftime("%Y.%m.%d")
-version="2022.10.17.post1"
+version="2022.10.16.post1"
 setuptools.setup(
     name="aufit",
     version=version,
