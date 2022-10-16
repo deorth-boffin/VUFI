@@ -12,9 +12,11 @@ if os.path.isfile(requirementPath):
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
+version=datetime.now().strftime("%Y.%m.%d")
+version="2022.10.17.post1"
 setuptools.setup(
     name="aufit",
-    version=datetime.now().strftime("%Y.%m.%d"),
+    version=version,
     author="deorth-kku",
     author_email="deorth_kku@outlook.com",
     description="Anime Upcale & Frame Interpolation Tool",
