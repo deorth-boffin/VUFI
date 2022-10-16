@@ -29,7 +29,7 @@ jobs:
         --wheel
         --outdir dist/
         .
-    - name: Rename binary wheel and source tarball to avoid confict
+    - name: Rename dist files to avoid confict
       run: |
         commit_id=`git rev-parse --short HEAD`
         extension="tar.gz"
