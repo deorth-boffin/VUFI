@@ -12,12 +12,9 @@ if os.path.isfile(requirementPath):
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-p=subprocess.Popen(["git","rev-parse","--short","HEAD"],stdout=subprocess.PIPE)
-commit_id=p.stdout.read().decode().strip()
-
 setuptools.setup(
     name="aufit",
-    version=datetime.now().strftime("%Y.%m.%d")+"."+commit_id,
+    version=datetime.now().strftime("%Y.%m.%d"),
     author="deorth-kku",
     author_email="deorth_kku@outlook.com",
     description="Anime Upcale & Frame Interpolation Tool",
