@@ -13,7 +13,7 @@ import threading
 from traceback import format_exc
 import ffmpeg
 import tempfile
-
+import io
 
 def touch(file_name):
     if os.path.exists(file_name):
@@ -115,8 +115,10 @@ class converter():
         if proc.returncode != 0:
             logging.critical("ChildProcess Exiting abnormally, cmdline %s, returncode %s" % (
                 proc.cmd, proc.returncode))
-
-            proc.stderr.seek(0)
+            try:
+                proc.stderr.seek(0)
+            except io.UnsupportedOperation:
+                pass
             stderr_text = proc.stderr.read().decode()
             if sys.platform == "win32":
                 stderr_text = stderr_text.replace("\r\n", "\n")
