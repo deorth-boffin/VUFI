@@ -13,7 +13,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 version=datetime.now().strftime("%Y.%m.%d")
-version="2022.10.16.post1"
+version=version+".post1"
 setuptools.setup(
     name="aufit",
     version=version,
@@ -22,7 +22,7 @@ setuptools.setup(
     description="Anime Upcale & Frame Interpolation Tool",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/deorth_kku/aufit",
+    url="https://github.com/deorth-kku/aufit",
     install_requires=install_requires,
     classifiers=[
         "Programming Language :: Python :: 3",
