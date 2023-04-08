@@ -155,6 +155,7 @@ def main(ctx, input, input_refps, refps_round, output, temp_dir, ffmpeg_bin_dir,
             basefile = os.path.basename(input_file)
             output_file = os.path.join(output, basefile)
         elif os.path.isfile(input) and (os.path.isfile(output) or not os.path.exists(output)):
+            os.makedirs(os.path.dirname(output),exist_ok=True)
             output_file = output
         else:
             logging.critical("input: %s" % input)
