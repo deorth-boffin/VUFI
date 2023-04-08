@@ -56,7 +56,8 @@ class converter():
     ffmpeg_cmd = "ffmpeg"
     ffprobe_cmd = "ffprobe"
 
-    ffmpeg_progess_args = ('-progress', 'pipe:', '-nostats',"-hide_banner","-loglevel","error")
+    ffmpeg_progess_args = ('-progress', 'pipe:', '-nostats',
+                           "-hide_banner", "-loglevel", "error")
 
     @classmethod
     def set_temp_dir(cls, dir):
@@ -151,11 +152,12 @@ class converter():
         try:
             info = ffmpeg.probe(
                 file, cmd=converter.ffprobe_cmd, select_streams="v:0")
-            stream = info["streams"][0]
+            stream: dict = info["streams"][0]
             fr_temp = stream['avg_frame_rate'].split("/")
             fr_temp[0] = int(fr_temp[0])
             fr_temp[1] = int(fr_temp[1])
             framerate = fr_temp[0]/fr_temp[1]
+            dar:str = stream.get("display_aspect_ratio", None)
             try:
                 frames = int(stream['nb_frames'])
             except KeyError:
@@ -173,7 +175,7 @@ class converter():
         except IndexError:
             logging.critical("no video stream in file %s" % file)
             raise
-        return frames, framerate
+        return frames, framerate, dar
 
     @staticmethod
     def ffmpeg_progress_thread(proc: subprocess.Popen, total: int = None):
@@ -189,7 +191,7 @@ class converter():
                 input_dir = os.path.dirname(input)
                 proc.total = converter.get_png_num(input_dir)
             else:
-                proc.total, _ = converter.get_videofile_frames(input)
+                proc.total, _, _ = converter.get_videofile_frames(input)
         else:
             proc.total = total
 
@@ -253,7 +255,7 @@ class converter():
         elif os.path.isfile(input_file):
             logging.debug("input %s is file" % input_file)
             self.current["type"] = "videofile"
-            self.current["frames"], self.current["framerate"] = converter.get_videofile_frames(
+            self.current["frames"], self.current["framerate"], self.dar = converter.get_videofile_frames(
                 input_file)
         else:
             raise ValueError("Unsupported input type")
@@ -426,6 +428,9 @@ class converter():
         if filters:
             for line in filters:
                 stream = stream.filter(**line)
+        else:
+            if self.dar:
+                stream=stream.filter("setdar",dar=self.dar.replace(r":",r"/"))
         streams = [stream]
         if hasattr(self, "audio"):
             streams.append(self.audio)
